@@ -74,8 +74,10 @@ class Settings:
     refit_days: int = 7
     window_days: int = 3 * 365
     xi: float = 0.0019
+    dc_ridge: float = 0.0
     elo_k: float = 20.0
     elo_home_adv: float = 60.0
+    models: tuple[str, ...] = ("base_rate", "elo", "dixon_coles")
 
 
 class _EloTracker:
@@ -127,13 +129,17 @@ class _Fitted:
         self.base = Probs(*(c / n for c in counts))
         self.base_run = Run("base_rate", cutoff, n, {"window_days": s.window_days})
 
-        self.dc = dixon_coles.fit(
+        self.dc = dixon_coles.fit_shrunk(
             [dixon_coles.Match(m.played_on, m.home, m.away, m.home_goals, m.away_goals) for m in train],
-            cutoff, s.xi)
+            cutoff, s.xi, s.dc_ridge)
         self.dc_run = Run("dixon_coles", cutoff, n, {
-            "xi": s.xi, "window_days": s.window_days, "home_adv": self.dc.home_adv, "rho": self.dc.rho,
+            "xi": s.xi, "ridge": s.dc_ridge, "window_days": s.window_days, "home_adv": self.dc.home_adv,
+            "rho": self.dc.rho,
             "promoted_prior_teams": PROMOTED_PRIOR_TEAMS})
 
+        self.models = s.models
+        if "elo" not in s.models:
+            return
         start = tracker.first_day + timedelta(days=BURN_IN_DAYS)
         pairs = [(d, o) for day, d, o in tracker.history
                  if day >= start and (cutoff - day).days <= s.window_days]
@@ -145,12 +151,15 @@ class _Fitted:
             "scale": self.logit[2]})
 
     def forecasts(self, m: MatchRecord, tracker: _EloTracker) -> list[Forecast]:
-        diff = tracker.snapshot_diff(self.ratings, self.promoted, m)
-        return [
-            Forecast(self.base_run, m, self.base),
-            Forecast(self.elo_run, m, Probs(*ordered_logit_probs(diff, *self.logit))),
-            Forecast(self.dc_run, m, self.dc.predict(m.home, m.away, PROMOTED_PRIOR_TEAMS)),
-        ]
+        out = []
+        if "base_rate" in self.models:
+            out.append(Forecast(self.base_run, m, self.base))
+        if "elo" in self.models:
+            diff = tracker.snapshot_diff(self.ratings, self.promoted, m)
+            out.append(Forecast(self.elo_run, m, Probs(*ordered_logit_probs(diff, *self.logit))))
+        if "dixon_coles" in self.models:
+            out.append(Forecast(self.dc_run, m, self.dc.predict(m.home, m.away, PROMOTED_PRIOR_TEAMS)))
+        return out
 
 
 def market_forecast(m: MatchRecord) -> Probs | None:

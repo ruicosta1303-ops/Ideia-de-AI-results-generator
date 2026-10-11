@@ -69,3 +69,37 @@ def test_predict_clips_rho_for_high_scoring_pairings():
     assert 0.2 > 1 / (lam * mu)  # rho would make P(0-0) negative without clipping
     mk = m.predict("A", "B")
     assert mk.home_win + mk.draw + mk.away_win == pytest.approx(1.0)
+
+
+def _newcomer_league():
+    """8 seasons for 6 established teams plus a weak newcomer with 4 bad games (synthetic)."""
+    teams, attack, defence, matches = simulate(n_teams=6, seasons=8, seed=5)
+    start = max(m.played_on for m in matches) + timedelta(days=7)
+    for i, opp in enumerate(teams[:4]):
+        matches.append(Match(start + timedelta(days=7 * i), "Newcomer", opp, 0, 2))
+    return matches, max(m.played_on for m in matches) + timedelta(days=1)
+
+
+def test_ridge_shrinks_teams_with_few_matches():
+    from sportsmodel.dixon_coles import fit_shrunk
+
+    matches, ref = _newcomer_league()
+    plain = fit(matches, ref, xi=0.0)
+    shrunk = fit_shrunk(matches, ref, xi=0.0, ridge=5.0)
+    lam_plain, _ = plain.expected_goals("Newcomer", "Team00")
+    lam_shrunk, _ = shrunk.expected_goals("Newcomer", "Team00")
+    assert lam_plain < 0.1          # 0 goals in 4 games -> absurdly low without shrinkage
+    assert lam_shrunk > 3 * lam_plain
+    # matches between established teams barely change (raw ratings are not
+    # comparable across fits because of the sum-to-zero constraint)
+    for h, a in (("Team01", "Team02"), ("Team03", "Team00")):
+        for x, y in zip(plain.expected_goals(h, a), shrunk.expected_goals(h, a)):
+            assert y == pytest.approx(x, rel=0.1)
+
+
+def test_zero_ridge_is_the_plain_fit():
+    from sportsmodel.dixon_coles import fit_shrunk
+
+    matches, ref = _newcomer_league()
+    a, b = fit(matches, ref, xi=0.0), fit_shrunk(matches, ref, xi=0.0, ridge=0.0)
+    assert np.allclose(a.attack, b.attack)

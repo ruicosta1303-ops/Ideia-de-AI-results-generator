@@ -82,11 +82,17 @@ def _tau(x, y, lam, mu, rho):
     return t
 
 
-def fit(matches: list[Match], reference: date, xi: float = 0.0019) -> DixonColesModel:
+def fit(matches: list[Match], reference: date, xi: float = 0.0019, ridge: float = 0.0,
+        offsets: dict[str, tuple[float, float]] | None = None) -> DixonColesModel:
     """Fit by weighted maximum likelihood using only matches before `reference`.
 
     xi = 0.0019/day (half-life ~ 1 year) is the value Dixon & Coles found
     reasonable; it should be re-tuned by backtesting.
+
+    ridge > 0 adds a penalty ridge * sum((attack - target)^2 + (defence - mean_defence - target)^2)
+    that pulls each team towards a prior. The target is 0 (league average) unless
+    `offsets` gives one for the team. The penalty is worth roughly `ridge` matches
+    of evidence, so it matters for teams with few games and little for the rest.
     """
     if any(m.played_on >= reference for m in matches):
         raise ValueError("fit() only accepts matches played before the reference date")
@@ -102,6 +108,8 @@ def fit(matches: list[Match], reference: date, xi: float = 0.0019) -> DixonColes
     y = np.array([m.away_goals for m in matches])
     w = time_weights([m.played_on for m in matches], reference, xi)
     const = gammaln(x + 1) + gammaln(y + 1)
+    off_a = np.array([(offsets or {}).get(t, (0.0, 0.0))[0] for t in teams])
+    off_d = np.array([(offsets or {}).get(t, (0.0, 0.0))[1] for t in teams])
 
     def unpack(p):
         attack = np.append(p[: n - 1], -p[: n - 1].sum())
@@ -117,7 +125,10 @@ def fit(matches: list[Match], reference: date, xi: float = 0.0019) -> DixonColes
         if (tau <= 0).any():
             return 1e12
         ll = np.log(tau) + x * log_lam - lam + y * log_mu - mu - const
-        return -(w * ll).sum()
+        penalty = 0.0
+        if ridge:
+            penalty = ridge * (((attack - off_a) ** 2).sum() + ((defence - defence.mean() - off_d) ** 2).sum())
+        return -(w * ll).sum() + penalty
 
     p0 = np.zeros(2 * n + 1)
     p0[-2] = 0.25
@@ -136,3 +147,32 @@ def fit(matches: list[Match], reference: date, xi: float = 0.0019) -> DixonColes
         fitted_until=reference,
         n_matches=len(matches),
     )
+
+
+ESTABLISHED_MIN_MATCHES = 38
+PRIOR_TEAMS = 3
+
+
+def fit_shrunk(matches: list[Match], reference: date, xi: float = 0.0019, ridge: float = 0.0) -> DixonColesModel:
+    """Two-pass regularised fit.
+
+    Pass 1 shrinks every team towards the league average. Teams with at least
+    ESTABLISHED_MIN_MATCHES games keep that target; teams with fewer (usually newly
+    promoted) are then shrunk towards the average of the PRIOR_TEAMS weakest
+    established teams instead, because promoted clubs start below average.
+    """
+    if ridge <= 0:
+        return fit(matches, reference, xi)
+    first = fit(matches, reference, xi, ridge)
+    counts: dict[str, int] = {}
+    for m in matches:
+        counts[m.home] = counts.get(m.home, 0) + 1
+        counts[m.away] = counts.get(m.away, 0) + 1
+    est = [i for i, t in enumerate(first.teams) if counts[t] >= ESTABLISHED_MIN_MATCHES]
+    newcomers = [t for t in first.teams if counts[t] < ESTABLISHED_MIN_MATCHES]
+    if len(est) < PRIOR_TEAMS or not newcomers:
+        return first
+    est = np.array(est)
+    weakest = est[np.argsort((first.attack - first.defence)[est])[:PRIOR_TEAMS]]
+    prior = (float(first.attack[weakest].mean()), float(first.defence[weakest].mean() - first.defence.mean()))
+    return fit(matches, reference, xi, ridge, {t: prior for t in newcomers})

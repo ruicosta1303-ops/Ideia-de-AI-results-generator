@@ -15,7 +15,7 @@ from pathlib import Path
 from psycopg.types.json import Jsonb
 
 from . import db
-from .backtest import MODEL_VERSION, Forecast, MatchRecord, Run, market_forecast, walk_forward
+from .backtest import MODEL_VERSION, Forecast, MatchRecord, Run, Settings, market_forecast, walk_forward
 from .discover_teams import current_season_start
 from .evaluate import report as make_report
 from .fetch_fixtures import DEFAULT_COMPETITIONS
@@ -25,6 +25,15 @@ from .providers.football_data_org import FootballDataOrg
 from .teams import API, CSV, historical_only_aliases, load_mapping
 
 UPCOMING = {"SCHEDULED", "TIMED"}
+MODEL_CONFIG = Path(__file__).resolve().parents[2] / "data" / "model_config.json"
+
+
+def load_settings(path: Path = MODEL_CONFIG) -> Settings:
+    """Hyper-parameters chosen on the validation period (see tune.py)."""
+    if not path.exists():
+        return Settings()
+    cfg = json.loads(path.read_text())
+    return Settings(**cfg["settings"])
 
 
 def log(msg: str) -> None:
@@ -164,11 +173,13 @@ def main(argv=None) -> int:
         return 1
     log(f"Ingested: {json.dumps(info, indent=1)}")
 
+    settings = load_settings()
+    log(f"Settings: {settings}")
     now = db.now()
     all_bt, all_live, all_mkt = [], [], []
     for comp in comps:
         recs = load_records(conn, comp, now, args.horizon_days)
-        bt, live = walk_forward(recs, test_from, live_cutoff=now.date())
+        bt, live = walk_forward(recs, test_from, settings, live_cutoff=now.date())
         mkt_run = Run("market_closing", test_from, 0, {"method": "proportional"})
         mkt = [Forecast(mkt_run, m, p) for m in recs
                if m.finished and m.played_on >= test_from and (p := market_forecast(m))]
