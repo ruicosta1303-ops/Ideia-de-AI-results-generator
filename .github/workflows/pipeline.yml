@@ -10,6 +10,10 @@ on:
       - "engine/data/**"
       - "db/migrations/**"
       - ".github/workflows/pipeline.yml"
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
 jobs:
   run:
     runs-on: ubuntu-latest

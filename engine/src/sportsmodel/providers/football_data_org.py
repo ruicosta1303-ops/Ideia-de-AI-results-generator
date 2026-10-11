@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -21,6 +22,15 @@ BASE_URL = "https://api.football-data.org/v4"
 TOKEN_ENV = "FOOTBALL_DATA_ORG_TOKEN"
 MAX_RANGE_DAYS = 10  # the API rejects wider dateFrom/dateTo windows
 MIN_SECONDS_BETWEEN_CALLS = 6.5  # free tier: 10 requests per minute
+MAX_RATE_LIMIT_RETRIES = 3
+
+
+def rate_limit_wait(body: str, reset_header: str | None) -> float:
+    """Seconds to wait after HTTP 429: the server's counter reset, else 'Wait N seconds', else 60."""
+    if reset_header and reset_header.strip().isdigit():
+        return float(reset_header) + 1
+    m = re.search(r"[Ww]ait (\d+) second", body)
+    return float(m.group(1)) + 1 if m else 60.0
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -63,6 +73,7 @@ class FootballDataOrg:
             raise ProviderError(f"{TOKEN_ENV} is not set; add it as a server-side secret")
         self._base_url = base_url
         self._last_call = 0.0
+        self._sleep = time.sleep
 
     def _get(self, path: str, params: dict) -> dict:
         wait = MIN_SECONDS_BETWEEN_CALLS - (time.monotonic() - self._last_call)
@@ -70,15 +81,20 @@ class FootballDataOrg:
             time.sleep(wait)
         url = f"{self._base_url}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
         req = urllib.request.Request(url, headers={"X-Auth-Token": self._token})
-        self._last_call = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.load(resp)
-        except urllib.error.HTTPError as e:
-            detail = e.read(500).decode("utf-8", "replace").replace(self._token, "***")
-            raise ProviderError(f"football-data.org returned HTTP {e.code} for {path}: {detail}") from None
-        except urllib.error.URLError as e:
-            raise ProviderError(f"could not reach football-data.org: {e.reason}") from None
+        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            self._last_call = time.monotonic()
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.load(resp)
+            except urllib.error.HTTPError as e:
+                detail = e.read(500).decode("utf-8", "replace").replace(self._token, "***")
+                if e.code == 429 and attempt < MAX_RATE_LIMIT_RETRIES:
+                    self._sleep(rate_limit_wait(detail, e.headers.get("X-RequestCounter-Reset")))
+                    continue
+                raise ProviderError(f"football-data.org returned HTTP {e.code} for {path}: {detail}") from None
+            except urllib.error.URLError as e:
+                raise ProviderError(f"could not reach football-data.org: {e.reason}") from None
+        raise AssertionError("unreachable")
 
     def team_names(self, competition: str) -> list[str]:
         return sorted(t["name"] for t in self._get(f"/competitions/{competition}/teams", {}).get("teams", []))

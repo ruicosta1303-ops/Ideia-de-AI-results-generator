@@ -6,6 +6,10 @@ on:
       - "engine/src/sportsmodel/discover_teams.py"
       - "engine/src/sportsmodel/providers/football_data_csv.py"
       - ".github/workflows/discover-teams.yml"
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
 jobs:
   discover:
     runs-on: ubuntu-latest

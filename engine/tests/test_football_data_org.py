@@ -53,3 +53,34 @@ def test_json_output_is_serialisable():
     import json
 
     json.dumps([f.to_json() for f in parse_matches(PAYLOAD, FETCHED)])
+
+
+def test_rate_limit_wait_parsing():
+    from sportsmodel.providers.football_data_org import rate_limit_wait
+
+    assert rate_limit_wait('{"message":"You reached your request limit. Wait 25 seconds."}', None) == 26
+    assert rate_limit_wait("", "40") == 41
+    assert rate_limit_wait("unexpected", None) == 60
+
+
+def test_retries_after_429(monkeypatch):
+    import io
+    import urllib.error
+
+    from sportsmodel.providers import football_data_org as mod
+
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(req)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many", {},
+                                         io.BytesIO(b'{"message":"Wait 2 seconds."}'))
+        return io.BytesIO(b'{"matches": []}')
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    api = mod.FootballDataOrg(token="test-token-123")
+    slept = []
+    api._sleep = slept.append
+    assert api._get("/matches", {}) == {"matches": []}
+    assert slept == [3] and len(calls) == 2

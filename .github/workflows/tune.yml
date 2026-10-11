@@ -6,6 +6,10 @@ on:
     paths:
       - "engine/src/sportsmodel/tune.py"
       - ".github/workflows/tune.yml"
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
 jobs:
   run:
     runs-on: ubuntu-latest
