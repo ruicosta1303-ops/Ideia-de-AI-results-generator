@@ -22,7 +22,7 @@ from .elo import Elo, fit_ordered_logit, ordered_logit_probs
 from .markets import MatchMarkets
 from .odds import fair_probabilities
 
-MODEL_VERSION = "0.1.0"
+MODEL_VERSION = "0.2.0"
 BURN_IN_DAYS = 300  # Elo ratings start equal; ignore their first season when fitting the logit
 PROMOTED_PRIOR_TEAMS = 3
 

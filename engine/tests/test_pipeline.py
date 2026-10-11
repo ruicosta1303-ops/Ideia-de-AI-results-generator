@@ -79,3 +79,8 @@ def test_full_pipeline(conn, monkeypatch, tmp_path):
                           "--out", str(tmp_path)]) == 0
     with psycopg.connect(url) as c:
         assert c.execute("SELECT count(*) FROM matches").fetchone()[0] == before
+
+
+def test_committed_model_config_loads():
+    s = pipeline.load_settings()
+    assert s.dc_ridge == 4.0

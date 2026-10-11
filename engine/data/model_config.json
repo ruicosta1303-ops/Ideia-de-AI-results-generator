@@ -1,0 +1,6 @@
+{
+  "settings": {"dc_ridge": 4.0},
+  "chosen_by": "tune.py: lowest Dixon-Coles log loss on the validation season 2022-07-01..2023-06-30 (2,438 matches), which is not part of the final evaluation (2023-07-01 onwards)",
+  "validation_log_loss": {"0": 0.9984, "1": 0.9763, "2": 0.9751, "4": 0.9742, "8": 0.9749, "16": 0.9795},
+  "chosen_on": "2026-10-11"
+}
