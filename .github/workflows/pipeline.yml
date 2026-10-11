@@ -1,9 +1,17 @@
 name: Pipeline
-# Downloads real data, runs the walk-forward backtest and forecasts upcoming matches.
-# The database is temporary for now (lives only during the job); results are kept
-# as the "export" artifact until a hosted database is configured.
+# Downloads real data, forecasts upcoming matches and (weekly, or on demand) re-runs
+# the walk-forward backtest. Uses the DATABASE_URL secret when it is set (permanent
+# database); otherwise a temporary database that exists only during the job.
 on:
   workflow_dispatch:
+    inputs:
+      backtest:
+        description: "Re-run the full backtest (about 10 minutes)"
+        type: boolean
+        default: true
+  schedule:
+    - cron: "47 5 * * *"   # every day 05:47 UTC: new data + forecasts
+    - cron: "17 4 * * 1"   # Mondays 04:17 UTC: full backtest
   push:
     paths:
       - "engine/src/**"
@@ -37,9 +45,17 @@ jobs:
       - run: uv sync
       - name: Run pipeline
         env:
-          DATABASE_URL: postgresql://sports:sports@localhost:5432/sports
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
           FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
-        run: uv run python -m sportsmodel.pipeline --out export
+          DAILY_ONLY: ${{ github.event.schedule == '47 5 * * *' || (github.event_name == 'workflow_dispatch' && !inputs.backtest) }}
+          HAS_PERMANENT_DB: ${{ secrets.DATABASE_URL != '' }}
+        run: |
+          echo "Permanent database configured: $HAS_PERMANENT_DB"
+          if [ "$DAILY_ONLY" = "true" ]; then
+            uv run python -m sportsmodel.pipeline --out export --skip-backtest
+          else
+            uv run python -m sportsmodel.pipeline --out export
+          fi
       - if: always()
         name: Show report
         run: test -f export/report.md && cat export/report.md | tee -a "$GITHUB_STEP_SUMMARY" || true

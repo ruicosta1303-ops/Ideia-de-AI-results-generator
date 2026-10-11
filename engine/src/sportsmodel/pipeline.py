@@ -59,20 +59,24 @@ def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg) -> dict:
 
     db.load_aliases(conn, load_mapping() + historical_only_aliases(names, current, load_mapping()))
     resolve = db.TeamResolver(conn)
+    stored = dict(((c, s), n) for c, s, n in conn.execute(
+        "SELECT competition_code, season, count(*) FROM matches WHERE result_source = %s GROUP BY 1, 2", (CSV,)))
+    skipped = []
     for (comp, s), rows in sorted(history.items()):
-        for r in rows:
-            db.upsert_result(conn, resolve, r, CSV, fetched_at)
+        if s != current and stored.get((comp, s)) == len(rows):
+            skipped.append(f"{comp} {s}")  # finished season already stored in full
+            continue
+        db.upsert_results(conn, resolve, rows, CSV, fetched_at)
     conn.commit()
 
     api_counts = {}
     for comp in comps:
         fixtures = api.season_matches(comp, start)
-        for f in fixtures:
-            db.upsert_fixture(conn, resolve, f, current)
+        db.upsert_fixtures(conn, resolve, fixtures, current)
         api_counts[comp] = len(fixtures)
     conn.commit()
     return {"csv_seasons": {f"{c} {s}": len(r) for (c, s), r in sorted(history.items())},
-            "api_matches": api_counts, "problems": problems, "fetched_at": fetched_at.isoformat()}
+            "api_matches": api_counts, "problems": problems, "unchanged_seasons_skipped": len(skipped), "fetched_at": fetched_at.isoformat()}
 
 
 def load_records(conn, comp: str, now: datetime, horizon_days: int = 14) -> list[MatchRecord]:
@@ -103,7 +107,7 @@ def store(conn, forecasts: list[Forecast], mode: str, cutoff_ts=None) -> None:
             ts = cutoff_ts or datetime.combine(f.run.cutoff, time.min, tzinfo=timezone.utc)
             run_ids[id(f.run)] = db.create_model_run(conn, f.run.model, MODEL_VERSION, mode, f.match.competition,
                                                      ts, f.run.n_train, f.run.params)
-        db.insert_prediction(conn, f.match.key, run_ids[id(f.run)], f.probs)
+    db.insert_predictions(conn, ((f.match.key, run_ids[id(f.run)], f.probs) for f in forecasts))
     conn.commit()
 
 
@@ -158,6 +162,8 @@ def main(argv=None) -> int:
     ap.add_argument("--seasons", type=int, default=8, help="seasons of history to download")
     ap.add_argument("--test-from", default="2023-07-01", help="first date of the backtest")
     ap.add_argument("--horizon-days", type=int, default=14, help="forecast fixtures up to this many days ahead")
+    ap.add_argument("--skip-backtest", action="store_true",
+                    help="only ingest and forecast upcoming matches; reuse the last stored evaluation")
     ap.add_argument("--out", default="export")
     args = ap.parse_args(argv)
     comps = args.competitions.split(",")
@@ -179,11 +185,17 @@ def main(argv=None) -> int:
     all_bt, all_live, all_mkt = [], [], []
     for comp in comps:
         recs = load_records(conn, comp, now, args.horizon_days)
-        bt, live = walk_forward(recs, test_from, settings, live_cutoff=now.date())
+        # with --skip-backtest the walk-forward starts after the last finished match, so it only forecasts
+        start = now.date() + timedelta(days=1) if args.skip_backtest else test_from
+        bt, live = walk_forward(recs, start, settings, live_cutoff=now.date())
         mkt_run = Run("market_closing", test_from, 0, {"method": "proportional"})
-        mkt = [Forecast(mkt_run, m, p) for m in recs
-               if m.finished and m.played_on >= test_from and (p := market_forecast(m))]
-        store(conn, bt, "backtest")
+        mkt = [] if args.skip_backtest else [Forecast(mkt_run, m, p) for m in recs
+                                             if m.finished and m.played_on >= test_from and (p := market_forecast(m))]
+        if not args.skip_backtest:
+            # keep one backtest per model version, so a persistent database does not grow on every run
+            conn.execute("DELETE FROM model_runs WHERE mode = 'backtest' AND model_version = %s "
+                         "AND competition_code = %s", (MODEL_VERSION, comp))
+            store(conn, bt, "backtest")
         store(conn, live, "live", cutoff_ts=now)
         log(f"{comp}: {len(recs)} matches, {len(bt) // 3} backtested, {len(live) // 3} upcoming forecast, "
             f"{len(mkt)} with closing odds")
@@ -191,10 +203,17 @@ def main(argv=None) -> int:
         all_live += live
         all_mkt += mkt
 
-    rep = make_report(all_bt, all_mkt)
-    conn.execute("INSERT INTO evaluation_reports (model_version, test_from, report) VALUES (%s, %s, %s)",
-                 (MODEL_VERSION, test_from, Jsonb(rep)))
-    conn.commit()
+    if args.skip_backtest:
+        row = conn.execute("SELECT report FROM evaluation_reports WHERE model_version = %s "
+                           "ORDER BY created_at DESC LIMIT 1", (MODEL_VERSION,)).fetchone()
+        rep = row[0] if row else {}
+        log("Backtest skipped; " + ("reusing the last stored evaluation" if row else
+                                    "no stored evaluation for this model version yet"))
+    else:
+        rep = make_report(all_bt, all_mkt)
+        conn.execute("INSERT INTO evaluation_reports (model_version, test_from, report) VALUES (%s, %s, %s)",
+                     (MODEL_VERSION, test_from, Jsonb(rep)))
+        conn.commit()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

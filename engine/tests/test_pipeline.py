@@ -72,6 +72,8 @@ def test_full_pipeline(conn, monkeypatch, tmp_path):
         live = c.execute("SELECT count(*) FROM predictions p JOIN model_runs r ON r.id = p.model_run_id "
                          "WHERE r.mode = 'live'").fetchone()[0]
         assert live == 3
+        first_backtest = backtest_count(c)
+        assert first_backtest > 0
     # second run is idempotent for matches
     with psycopg.connect(url) as c:
         before = c.execute("SELECT count(*) FROM matches").fetchone()[0]
@@ -79,6 +81,23 @@ def test_full_pipeline(conn, monkeypatch, tmp_path):
                           "--out", str(tmp_path)]) == 0
     with psycopg.connect(url) as c:
         assert c.execute("SELECT count(*) FROM matches").fetchone()[0] == before
+        assert backtest_count(c) == first_backtest  # replaced, not duplicated
+    second = json.loads((tmp_path / "latest.json").read_text())
+    assert second["ingest"]["unchanged_seasons_skipped"] == 3  # 4 seasons, the current one is always refreshed
+
+    # daily mode: no new backtest, evaluation reused, new live forecasts added
+    assert pipeline.main(["--competitions", "PL", "--seasons", "4", "--test-from", test_from,
+                          "--skip-backtest", "--out", str(tmp_path)]) == 0
+    with psycopg.connect(url) as c:
+        assert backtest_count(c) == first_backtest
+    out = json.loads((tmp_path / "latest.json").read_text())
+    assert out["evaluation"]["PL"]["dixon_coles"]["n"] == rep["dixon_coles"]["n"]
+    assert len(out["upcoming"]) == 1
+
+
+def backtest_count(c):
+    return c.execute("SELECT count(*) FROM predictions p JOIN model_runs r ON r.id = p.model_run_id "
+                     "WHERE r.mode = 'backtest'").fetchone()[0]
 
 
 def test_committed_model_config_loads():
