@@ -56,6 +56,10 @@ jobs:
           else
             uv run python -m sportsmodel.pipeline --out export
           fi
+      - name: Database status
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
+        run: uv run python -m sportsmodel.db_status
       - if: always()
         name: Show report
         run: test -f export/report.md && cat export/report.md | tee -a "$GITHUB_STEP_SUMMARY" || true
