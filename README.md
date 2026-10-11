@@ -4,10 +4,14 @@ A football (soccer) analytics platform that estimates match-outcome
 probabilities from real data, evaluates itself honestly, and explains its
 reasoning. Predictions are estimates with uncertainty, never guarantees.
 
-**Status:** Phase 1 (architecture) done; the statistical core is implemented and
-tested. No real data has been ingested yet. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the plan, data sources,
-risks and acceptance tests.
+**Status:** Phase 2 in progress. Real data is ingested, three models are
+backtested walk-forward on 7,528 matches, and upcoming fixtures are forecast by
+a GitHub Actions job. No website yet. See [`docs/RESULTS.md`](docs/RESULTS.md)
+for the current results and known problems, and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the plan.
+
+Run it: GitHub → Actions → **Pipeline** → *Run workflow*. It needs the
+repository secret `FOOTBALL_DATA_ORG_TOKEN`.
 
 ## What exists today
 
