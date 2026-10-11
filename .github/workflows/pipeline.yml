@@ -37,7 +37,8 @@ jobs:
           FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
         run: uv run python -m sportsmodel.pipeline --out export
       - if: always()
-        run: test -f export/report.md && cat export/report.md >> "$GITHUB_STEP_SUMMARY" || true
+        name: Show report
+        run: test -f export/report.md && cat export/report.md | tee -a "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v4
         with:
           name: export

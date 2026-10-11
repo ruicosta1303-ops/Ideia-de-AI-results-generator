@@ -9,7 +9,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from psycopg.types.json import Jsonb
@@ -66,7 +66,7 @@ def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg) -> dict:
             "api_matches": api_counts, "problems": problems, "fetched_at": fetched_at.isoformat()}
 
 
-def load_records(conn, comp: str, now: datetime) -> list[MatchRecord]:
+def load_records(conn, comp: str, now: datetime, horizon_days: int = 14) -> list[MatchRecord]:
     rows = conn.execute(
         """
         SELECT m.id, m.played_on, m.kickoff_utc, m.status, th.name, ta.name, m.home_goals, m.away_goals,
@@ -80,8 +80,8 @@ def load_records(conn, comp: str, now: datetime) -> list[MatchRecord]:
         """, (comp,)).fetchall()
     out = []
     for mid, played_on, kickoff, status, home, away, hg, ag, oh, od, oa in rows:
-        if hg is None and not (status in UPCOMING and kickoff and kickoff > now):
-            continue  # postponed / in play / unknown: neither a result nor a forecastable fixture
+        if hg is None and not (status in UPCOMING and kickoff and now < kickoff <= now + timedelta(days=horizon_days)):
+            continue  # postponed / in play / too far ahead: neither a result nor a fixture to forecast now
         out.append(MatchRecord(mid, comp, played_on, home, away, hg, ag,
                                (float(oh), float(od), float(oa)) if oh is not None else None))
     return out
@@ -148,6 +148,7 @@ def main(argv=None) -> int:
     ap.add_argument("--competitions", default=",".join(DEFAULT_COMPETITIONS))
     ap.add_argument("--seasons", type=int, default=8, help="seasons of history to download")
     ap.add_argument("--test-from", default="2023-07-01", help="first date of the backtest")
+    ap.add_argument("--horizon-days", type=int, default=14, help="forecast fixtures up to this many days ahead")
     ap.add_argument("--out", default="export")
     args = ap.parse_args(argv)
     comps = args.competitions.split(",")
@@ -166,7 +167,7 @@ def main(argv=None) -> int:
     now = db.now()
     all_bt, all_live, all_mkt = [], [], []
     for comp in comps:
-        recs = load_records(conn, comp, now)
+        recs = load_records(conn, comp, now, args.horizon_days)
         bt, live = walk_forward(recs, test_from, live_cutoff=now.date())
         mkt_run = Run("market_closing", test_from, 0, {"method": "proportional"})
         mkt = [Forecast(mkt_run, m, p) for m in recs
