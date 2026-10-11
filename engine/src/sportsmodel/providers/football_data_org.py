@@ -68,7 +68,7 @@ class FootballDataOrg:
         wait = MIN_SECONDS_BETWEEN_CALLS - (time.monotonic() - self._last_call)
         if self._last_call and wait > 0:
             time.sleep(wait)
-        url = f"{self._base_url}{path}?{urllib.parse.urlencode(params)}"
+        url = f"{self._base_url}{path}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
         req = urllib.request.Request(url, headers={"X-Auth-Token": self._token})
         self._last_call = time.monotonic()
         try:
@@ -79,6 +79,9 @@ class FootballDataOrg:
             raise ProviderError(f"football-data.org returned HTTP {e.code} for {path}: {detail}") from None
         except urllib.error.URLError as e:
             raise ProviderError(f"could not reach football-data.org: {e.reason}") from None
+
+    def team_names(self, competition: str) -> list[str]:
+        return sorted(t["name"] for t in self._get(f"/competitions/{competition}/teams", {}).get("teams", []))
 
     def fixtures(self, competitions: list[str], date_from: date, date_to: date) -> list[Fixture]:
         if date_to < date_from:
