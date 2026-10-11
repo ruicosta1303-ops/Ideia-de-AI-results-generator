@@ -83,6 +83,11 @@ class FootballDataOrg:
     def team_names(self, competition: str) -> list[str]:
         return sorted(t["name"] for t in self._get(f"/competitions/{competition}/teams", {}).get("teams", []))
 
+    def season_matches(self, competition: str, season_start_year: int) -> list[Fixture]:
+        """Every match of a competition season (finished, scheduled, postponed...)."""
+        payload = self._get(f"/competitions/{competition}/matches", {"season": season_start_year})
+        return parse_matches(payload, datetime.now(timezone.utc))
+
     def fixtures(self, competitions: list[str], date_from: date, date_to: date) -> list[Fixture]:
         if date_to < date_from:
             raise ValueError("date_to must not be before date_from")

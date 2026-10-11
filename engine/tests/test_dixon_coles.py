@@ -59,3 +59,13 @@ def test_unknown_team_raises():
     model = fit(matches, max(m.played_on for m in matches) + timedelta(days=1))
     with pytest.raises(KeyError):
         model.predict("Team00", "Nobody FC")
+
+
+def test_predict_clips_rho_for_high_scoring_pairings():
+    from sportsmodel.dixon_coles import DixonColesModel
+
+    m = DixonColesModel(("A", "B"), np.array([1.0, -1.0]), np.array([1.0, 1.0]), 0.3, 0.2, date(2025, 1, 1), 10)
+    lam, mu = m.expected_goals("A", "B")
+    assert 0.2 > 1 / (lam * mu)  # rho would make P(0-0) negative without clipping
+    mk = m.predict("A", "B")
+    assert mk.home_win + mk.draw + mk.away_win == pytest.approx(1.0)

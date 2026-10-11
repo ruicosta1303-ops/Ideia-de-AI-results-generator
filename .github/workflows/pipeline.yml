@@ -1,0 +1,44 @@
+name: Pipeline
+# Downloads real data, runs the walk-forward backtest and forecasts upcoming matches.
+# The database is temporary for now (lives only during the job); results are kept
+# as the "export" artifact until a hosted database is configured.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "engine/src/**"
+      - "engine/data/**"
+      - "db/migrations/**"
+      - ".github/workflows/pipeline.yml"
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sports
+          POSTGRES_PASSWORD: sports
+          POSTGRES_DB: sports
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Run pipeline
+        env:
+          DATABASE_URL: postgresql://sports:sports@localhost:5432/sports
+          FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
+        run: uv run python -m sportsmodel.pipeline --out export
+      - if: always()
+        run: test -f export/report.md && cat export/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: export
+          path: engine/export/

@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+import numpy as np
+from scipy.optimize import minimize
+
 
 def margin_multiplier(goal_diff: int) -> float:
     gd = abs(goal_diff)
@@ -56,3 +59,29 @@ def ordered_logit_probs(diff: float, cut_low: float, cut_high: float, scale: flo
     p_away = 1 / (1 + math.exp(-(cut_low - z)))
     p_not_home = 1 / (1 + math.exp(-(cut_high - z)))
     return 1 - p_not_home, p_not_home - p_away, p_away
+
+
+def fit_ordered_logit(diffs, outcomes) -> tuple[float, float, float]:
+    """Maximum-likelihood cut points and scale for ordered_logit_probs.
+
+    diffs: pre-match Elo differences; outcomes: 0 = home win, 1 = draw, 2 = away win.
+    """
+    d = np.asarray(diffs, dtype=float) / 400.0
+    o = np.asarray(outcomes, dtype=int)
+    if len(d) < 50 or len(set(o.tolist())) < 3:
+        raise ValueError("need at least 50 matches with all three outcomes to fit")
+
+    def nll(p):
+        c1, gap, beta = p
+        c2 = c1 + np.exp(gap)
+        z = beta * d
+        p_away = 1 / (1 + np.exp(-(c1 - z)))
+        p_not_home = 1 / (1 + np.exp(-(c2 - z)))
+        probs = np.stack([1 - p_not_home, p_not_home - p_away, p_away], axis=1)
+        return -np.log(np.clip(probs[np.arange(len(o)), o], 1e-12, 1)).sum()
+
+    res = minimize(nll, [-1.0, 0.0, 2.0], method="Nelder-Mead", options={"maxiter": 4000, "xatol": 1e-6, "fatol": 1e-8})
+    c1, gap, beta = res.x
+    if beta <= 0:
+        raise RuntimeError("ordered logit fit gave a non-positive slope")
+    return float(c1), float(c1 + np.exp(gap)), float(400.0 / beta)

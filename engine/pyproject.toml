@@ -5,6 +5,7 @@ description = "Statistical prediction engine for football matches (Elo, Dixon-Co
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.0",
+    "psycopg[binary]>=3.2",
     "scipy>=1.13",
 ]
 

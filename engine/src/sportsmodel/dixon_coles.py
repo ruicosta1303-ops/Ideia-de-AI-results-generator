@@ -17,7 +17,7 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.special import gammaln
 
-from .markets import MatchMarkets, match_markets
+from .markets import MatchMarkets, match_markets, rho_bounds
 
 
 @dataclass(frozen=True)
@@ -39,21 +39,31 @@ class DixonColesModel:
     fitted_until: date
     n_matches: int
 
-    def expected_goals(self, home: str, away: str) -> tuple[float, float]:
-        h, a = self._index(home), self._index(away)
-        lam = np.exp(self.home_adv + self.attack[h] + self.defence[a])
-        mu = np.exp(self.attack[a] + self.defence[h])
-        return float(lam), float(mu)
+    def ratings(self, team: str, unknown_as_weakest: int = 0) -> tuple[float, float]:
+        """(attack, defence) of a team.
 
-    def predict(self, home: str, away: str) -> MatchMarkets:
-        lam, mu = self.expected_goals(home, away)
-        return match_markets(lam, mu, self.rho)
+        A team absent from the training data (e.g. newly promoted) raises KeyError,
+        unless unknown_as_weakest > 0: it then gets the average ratings of that many
+        weakest teams, a common prior for promoted clubs.
+        """
+        if team in self.teams:
+            i = self.teams.index(team)
+            return float(self.attack[i]), float(self.defence[i])
+        if unknown_as_weakest <= 0:
+            raise KeyError(f"team {team!r} has no rating in this model")
+        weakest = np.argsort(self.attack - self.defence)[:unknown_as_weakest]
+        return float(self.attack[weakest].mean()), float(self.defence[weakest].mean())
 
-    def _index(self, team: str) -> int:
-        try:
-            return self.teams.index(team)
-        except ValueError:
-            raise KeyError(f"team {team!r} has no rating in this model") from None
+    def expected_goals(self, home: str, away: str, unknown_as_weakest: int = 0) -> tuple[float, float]:
+        ah, dh = self.ratings(home, unknown_as_weakest)
+        aa, da = self.ratings(away, unknown_as_weakest)
+        return float(np.exp(self.home_adv + ah + da)), float(np.exp(aa + dh))
+
+    def predict(self, home: str, away: str, unknown_as_weakest: int = 0) -> MatchMarkets:
+        lam, mu = self.expected_goals(home, away, unknown_as_weakest)
+        # rho was valid for the training matches; clip it to this match's valid range
+        lo, hi = rho_bounds(lam, mu)
+        return match_markets(lam, mu, min(max(self.rho, lo), hi))
 
 
 def time_weights(dates: list[date], reference: date, xi: float) -> np.ndarray:
