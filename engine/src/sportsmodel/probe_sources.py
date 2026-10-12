@@ -44,6 +44,15 @@ def main() -> int:
         except ProviderError as e:
             print(f"  {code}: {str(e)[:160]}")
 
+    print("\nChampions League history with this token:")
+    for season in (2025, 2024, 2023, 2022):
+        try:
+            m = api._get("/competitions/CL/matches", {"season": season})
+            done = [x for x in m.get("matches", []) if x.get("status") == "FINISHED"]
+            print(f"  CL {season}: OK, {len(done)} finished matches")
+        except ProviderError as e:
+            print(f"  CL {season}: {str(e)[:160]}")
+
     print("\nfootball-data.co.uk upcoming fixtures file (fixtures.csv):")
     rows = get_csv("fixtures.csv")
     print("  ", rows if isinstance(rows, str) else dict(Counter(r.get("Div") for r in rows)))
