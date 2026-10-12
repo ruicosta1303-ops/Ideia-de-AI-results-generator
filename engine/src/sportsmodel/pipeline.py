@@ -14,15 +14,14 @@ from pathlib import Path
 
 from psycopg.types.json import Jsonb
 
-from . import db
+from . import competitions, db
 from .backtest import MODEL_VERSION, Forecast, MatchRecord, Run, Settings, market_forecast, walk_forward
 from .discover_teams import current_season_start
 from .evaluate import report as make_report
-from .fetch_fixtures import DEFAULT_COMPETITIONS
 from .providers import football_data_csv as csvsrc
 from .providers.base import ProviderError
 from .providers.football_data_org import FootballDataOrg
-from .teams import API, CSV, historical_only_aliases, load_mapping
+from .teams import CSV, csv_only_aliases, historical_only_aliases, load_mapping
 
 UPCOMING = {"SCHEDULED", "TIMED"}
 MODEL_CONFIG = Path(__file__).resolve().parents[2] / "data" / "model_config.json"
@@ -40,43 +39,88 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg) -> dict:
-    start = current_season_start(date.today())
-    current = csvsrc.season_code(start)
+def current_season(comp: str, today: date) -> str:
+    c = competitions.get(comp)
+    return str(today.year) if c.calendar_season else competitions.season_for(comp, current_season_start(today))
+
+
+def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg | None) -> dict:
+    today = date.today()
+    start = current_season_start(today)
     fetched_at = db.now()
-    history, names, problems = {}, defaultdict(set), []
+    history: dict[tuple[str, str], list] = {}
+    problems: list[str] = []
     for comp in comps:
-        for y in range(start - seasons + 1, start + 1):
-            s = csvsrc.season_code(y)
+        c = competitions.get(comp)
+        if c.kind == "csv_extra":
+            first = (today.year if c.calendar_season else start) - seasons + 1
             try:
-                rows = csvsrc.results(comp, s)
+                rows = csvsrc.extra_results(comp, first)
+            except ProviderError as e:
+                problems.append(f"{comp}: {e}")
+                continue
+            for r in rows:
+                history.setdefault((comp, r.season), []).append(r)
+            continue
+        for y in range(start - seasons + 1, start + 1):
+            s = competitions.season_for(comp, y)
+            try:
+                history[(comp, s)] = csvsrc.results(comp, s)
             except ProviderError as e:
                 problems.append(f"{comp} {s}: {e}")
-                continue
-            history[(comp, s)] = rows
-            for r in rows:
-                names[s].update((r.home_team, r.away_team))
 
-    db.load_aliases(conn, load_mapping() + historical_only_aliases(names, current, load_mapping()))
+    csv_comps = [c for c in comps if competitions.get(c).kind != "api"]
+    api_comps = [c for c in comps if competitions.get(c).kind == "api"]
+    csv_fixtures = []
+    if csv_comps:
+        try:
+            csv_fixtures = csvsrc.upcoming_fixtures(csv_comps, fetched_at)
+        except ProviderError as e:
+            problems.append(f"upcoming fixtures: {e}")
+
+    # team identities: API leagues are mapped by hand, CSV-only leagues keep their CSV names
+    api_names_by_season: dict[str, set[str]] = defaultdict(set)
+    names_by_comp: dict[str, set[str]] = defaultdict(set)
+    for (comp, s), rows in history.items():
+        for r in rows:
+            names_by_comp[comp].update((r.home_team, r.away_team))
+            if comp in api_comps:
+                api_names_by_season[s].update((r.home_team, r.away_team))
+    for f in csv_fixtures:
+        names_by_comp[f.competition_code].update((f.home_team, f.away_team))
+    mapping = load_mapping()
+    current_api = competitions.season_for("PL", start)
+    aliases = mapping + historical_only_aliases(api_names_by_season, current_api, mapping)
+    aliases += csv_only_aliases({c: n for c, n in names_by_comp.items() if c in csv_comps},
+                                {c: n for c, n in names_by_comp.items() if c in api_comps}, mapping)
+    db.load_aliases(conn, aliases)
     resolve = db.TeamResolver(conn)
+
     stored = dict(((c, s), n) for c, s, n in conn.execute(
         "SELECT competition_code, season, count(*) FROM matches WHERE result_source = %s GROUP BY 1, 2", (CSV,)))
     skipped = []
     for (comp, s), rows in sorted(history.items()):
-        if s != current and stored.get((comp, s)) == len(rows):
+        if s != current_season(comp, today) and stored.get((comp, s)) == len(rows):
             skipped.append(f"{comp} {s}")  # finished season already stored in full
             continue
         db.upsert_results(conn, resolve, rows, CSV, fetched_at)
     conn.commit()
 
-    api_counts = {}
-    for comp in comps:
+    fixture_counts: dict[str, int] = defaultdict(int)
+    for comp in api_comps:
         fixtures = api.season_matches(comp, start)
-        db.upsert_fixtures(conn, resolve, fixtures, current)
-        api_counts[comp] = len(fixtures)
+        db.upsert_fixtures(conn, resolve, fixtures, current_api)
+        fixture_counts[comp] = len(fixtures)
+    by_season: dict[str, list] = defaultdict(list)
+    for f in csv_fixtures:
+        by_season[competitions.season_of_date(f.competition_code, f.leg_date)].append(f)
+        fixture_counts[f.competition_code] += 1
+    for season, fs in by_season.items():
+        db.upsert_fixtures(conn, resolve, fs, season)
     conn.commit()
     return {"csv_seasons": {f"{c} {s}": len(r) for (c, s), r in sorted(history.items())},
-            "api_matches": api_counts, "problems": problems, "unchanged_seasons_skipped": len(skipped), "fetched_at": fetched_at.isoformat()}
+            "fixtures": dict(fixture_counts), "problems": problems, "unchanged_seasons_skipped": len(skipped),
+            "fetched_at": fetched_at.isoformat()}
 
 
 def load_records(conn, comp: str, now: datetime, horizon_days: int = 14) -> list[MatchRecord]:
@@ -158,7 +202,7 @@ def export_live(live: list[Forecast], now: datetime) -> list[dict]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--competitions", default=",".join(DEFAULT_COMPETITIONS))
+    ap.add_argument("--competitions", default=",".join(competitions.ALL_CODES))
     ap.add_argument("--seasons", type=int, default=8, help="seasons of history to download")
     ap.add_argument("--test-from", default="2023-07-01", help="first date of the backtest")
     ap.add_argument("--horizon-days", type=int, default=14, help="forecast fixtures up to this many days ahead")
@@ -173,7 +217,8 @@ def main(argv=None) -> int:
     db.migrate(conn)
     db.seed_competitions(conn)
     try:
-        info = ingest(conn, comps, args.seasons, FootballDataOrg())
+        api = FootballDataOrg() if any(competitions.get(c).kind == "api" for c in comps) else None
+        info = ingest(conn, comps, args.seasons, api)
     except (ProviderError, ValueError) as e:
         print(f"ERROR during ingestion: {e}", file=sys.stderr)
         return 1

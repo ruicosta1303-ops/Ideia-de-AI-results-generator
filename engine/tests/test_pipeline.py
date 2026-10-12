@@ -103,3 +103,45 @@ def backtest_count(c):
 def test_committed_model_config_loads():
     s = pipeline.load_settings()
     assert s.dc_ridge == 4.0
+
+
+def test_pipeline_csv_only_league_with_repeated_meetings(conn, monkeypatch, tmp_path):
+    """Austria-style league: results and fixtures from football-data.co.uk, the same pairing
+    played twice per season (regular phase + split). SYNTHETIC test-only data."""
+    url = URL.rsplit("/", 1)[0] + "/" + conn.info.dbname
+    monkeypatch.setenv("DATABASE_URL", url)
+    names = [f"Alp {i}" for i in range(8)]
+    start_year = current_season_start(TODAY)
+
+    def extra_results(comp, first_year):
+        rng = np.random.default_rng(7)
+        out = []
+        for y in range(first_year, start_year + 1):
+            season = season_code(y)
+            d0 = date(y, 7, 20)
+            pairs = [(h, a) for h in range(8) for a in range(8) if h != a] * 2  # every pairing twice
+            for i, (h, a) in enumerate(pairs):
+                d = d0 + timedelta(days=3 * (i // 4))
+                if d >= TODAY - timedelta(days=1) or (y == start_year and (h, a) == (0, 1)):
+                    continue
+                out.append(HistoricalMatch(comp, season, d, names[h], names[a], int(rng.poisson(1.5)),
+                                           int(rng.poisson(1.1)), None, None, None, None, (2.3, 3.3, 3.1), "PSC"))
+        return out
+
+    kick = datetime.combine(TODAY + timedelta(days=3), datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=17)
+    monkeypatch.setattr(pipeline.csvsrc, "extra_results", extra_results)
+    monkeypatch.setattr(pipeline.csvsrc, "upcoming_fixtures", lambda codes, fetched: [
+        Fixture("football-data.co.uk", "x", "AUT", "Austrian Bundesliga", kick, "TIMED", names[0], names[1],
+                None, None, None, None, fetched, leg_date=kick.date())])
+    monkeypatch.setattr(pipeline, "load_mapping", lambda: [])
+
+    test_from = (TODAY - timedelta(days=500)).isoformat()
+    assert pipeline.main(["--competitions", "AUT", "--seasons", "4", "--test-from", test_from, "--out", str(tmp_path)]) == 0
+    out = json.loads((tmp_path / "latest.json").read_text())
+    assert [(u["home"], u["away"]) for u in out["upcoming"]] == [("Alp 0", "Alp 1")]
+    assert out["evaluation"]["AUT"]["dixon_coles"]["n"] > 100
+    with psycopg.connect(url) as c:
+        dup = c.execute("SELECT count(*) FROM (SELECT 1 FROM matches WHERE competition_code = 'AUT' "
+                        "GROUP BY season, home_team_id, away_team_id HAVING count(*) > 1) x").fetchone()[0]
+        assert dup > 0  # repeated meetings kept as separate matches
+        assert c.execute("SELECT count(*) FROM matches WHERE competition_code = 'AUT' AND leg_date IS NULL").fetchone()[0] == 0
