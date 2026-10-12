@@ -1,11 +1,6 @@
 name: Discover team names
 on:
-  workflow_dispatch:
-  push:
-    paths:
-      - "engine/src/sportsmodel/discover_teams.py"
-      - "engine/src/sportsmodel/providers/football_data_csv.py"
-      - ".github/workflows/discover-teams.yml"
+  workflow_dispatch:  # manual only (Actions tab -> Run workflow), so it never displaces the pipeline in the queue
 # football-data.org allows 10 requests/minute per token: never run two of these jobs at once
 concurrency:
   group: football-data-org

@@ -12,15 +12,7 @@ from psycopg.types.json import Jsonb
 
 MIGRATIONS = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
-COMPETITIONS = {
-    "PL": ("Premier League", "E0"),
-    "PD": ("Primera Division", "SP1"),
-    "BL1": ("Bundesliga", "D1"),
-    "SA": ("Serie A", "I1"),
-    "FL1": ("Ligue 1", "F1"),
-    "PPL": ("Primeira Liga", "P1"),
-    "DED": ("Eredivisie", "N1"),
-}
+from .competitions import COMPETITIONS, get as get_competition
 
 
 class UnknownTeamError(LookupError):
@@ -56,9 +48,10 @@ def migrate(conn: psycopg.Connection, migrations_dir: Path = MIGRATIONS) -> list
 def seed_competitions(conn: psycopg.Connection) -> None:
     with conn.cursor() as cur:
         cur.executemany(
-            "INSERT INTO competitions (code, name, csv_division) VALUES (%s, %s, %s) "
-            "ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, csv_division = EXCLUDED.csv_division",
-            [(c, n, d) for c, (n, d) in COMPETITIONS.items()],
+            "INSERT INTO competitions (code, name, csv_division, country, source_kind) VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, csv_division = EXCLUDED.csv_division, "
+            "country = EXCLUDED.country, source_kind = EXCLUDED.source_kind",
+            [(c.code, c.name, c.csv_code, c.country, c.kind) for c in COMPETITIONS.values()],
         )
     conn.commit()
 
@@ -100,10 +93,10 @@ def now() -> datetime:
 _RESULT_SQL = """
     INSERT INTO matches (competition_code, season, home_team_id, away_team_id, played_on, status,
                          home_goals, away_goals, home_shots, away_shots,
-                         home_shots_on_target, away_shots_on_target, result_source, result_fetched_at)
+                         home_shots_on_target, away_shots_on_target, result_source, result_fetched_at, leg_date)
     VALUES (%(c)s, %(s)s, %(h)s, %(a)s, %(d)s, 'FINISHED', %(hg)s, %(ag)s, %(hs)s, %(as_)s,
-            %(hst)s, %(ast)s, %(src)s, %(fa)s)
-    ON CONFLICT (competition_code, season, home_team_id, away_team_id) DO UPDATE SET
+            %(hst)s, %(ast)s, %(src)s, %(fa)s, %(ld)s)
+    ON CONFLICT ON CONSTRAINT matches_identity DO UPDATE SET
         played_on = EXCLUDED.played_on, status = 'FINISHED',
         home_goals = EXCLUDED.home_goals, away_goals = EXCLUDED.away_goals,
         home_shots = EXCLUDED.home_shots, away_shots = EXCLUDED.away_shots,
@@ -116,6 +109,7 @@ _ODDS_SQL = """
     INSERT INTO match_odds (match_id, source, kind, home, draw, away, fetched_at)
     SELECT id, %(osrc)s, 'closing', %(oh)s, %(od)s, %(oa)s, %(fa)s FROM matches
     WHERE competition_code = %(c)s AND season = %(s)s AND home_team_id = %(h)s AND away_team_id = %(a)s
+      AND leg_date IS NOT DISTINCT FROM %(ld)s::date
     ON CONFLICT (match_id, source, kind) DO UPDATE SET
         home = EXCLUDED.home, draw = EXCLUDED.draw, away = EXCLUDED.away, fetched_at = EXCLUDED.fetched_at
 """
@@ -123,11 +117,11 @@ _ODDS_SQL = """
 _FIXTURE_SQL = """
     INSERT INTO matches (competition_code, season, home_team_id, away_team_id, played_on, kickoff_utc,
                          status, home_goals, away_goals, fixture_source, fixture_source_id, fixture_fetched_at,
-                         result_source, result_fetched_at)
+                         result_source, result_fetched_at, leg_date)
     VALUES (%(c)s, %(s)s, %(h)s, %(a)s, %(d)s, %(k)s, %(st)s, %(hg)s, %(ag)s, %(src)s, %(sid)s, %(fa)s,
             CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(src)s END,
-            CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(fa)s::timestamptz END)
-    ON CONFLICT (competition_code, season, home_team_id, away_team_id) DO UPDATE SET
+            CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(fa)s::timestamptz END, %(ld)s)
+    ON CONFLICT ON CONSTRAINT matches_identity DO UPDATE SET
         played_on = EXCLUDED.played_on, kickoff_utc = EXCLUDED.kickoff_utc,
         status = CASE WHEN matches.home_goals IS NOT NULL AND EXCLUDED.home_goals IS NULL
                       THEN matches.status ELSE EXCLUDED.status END,
@@ -149,7 +143,8 @@ _PREDICTION_SQL = """
 def _result_params(resolve: TeamResolver, m, source: str, fetched_at: datetime) -> dict:
     p = dict(c=m.competition_code, s=m.season, h=resolve(source, m.home_team), a=resolve(source, m.away_team),
              d=m.played_on, hg=m.home_goals, ag=m.away_goals, hs=m.home_shots, as_=m.away_shots,
-             hst=m.home_shots_on_target, ast=m.away_shots_on_target, src=source, fa=fetched_at)
+             hst=m.home_shots_on_target, ast=m.away_shots_on_target, src=source, fa=fetched_at,
+             ld=m.played_on if get_competition(m.competition_code).uses_leg_date else None)
     if m.closing_odds:
         p.update(osrc=f"{source}:{m.closing_odds_source}", oh=m.closing_odds[0], od=m.closing_odds[1],
                  oa=m.closing_odds[2])
@@ -159,7 +154,8 @@ def _result_params(resolve: TeamResolver, m, source: str, fetched_at: datetime) 
 def _fixture_params(resolve: TeamResolver, f, season: str) -> dict:
     return dict(c=f.competition_code, s=season, h=resolve(f.source, f.home_team), a=resolve(f.source, f.away_team),
                 d=f.kickoff_utc.date(), k=f.kickoff_utc, st=f.status, hg=f.home_goals, ag=f.away_goals,
-                src=f.source, sid=f.source_match_id, fa=f.fetched_at)
+                src=f.source, sid=f.source_match_id, fa=f.fetched_at,
+                ld=(f.leg_date or f.kickoff_utc.date()) if get_competition(f.competition_code).uses_leg_date else None)
 
 
 def _prediction_params(match_id: int, run_id: int, mk) -> tuple:
@@ -172,7 +168,8 @@ def _prediction_params(match_id: int, run_id: int, mk) -> tuple:
 
 def _match_id(conn, p: dict) -> int:
     return conn.execute("SELECT id FROM matches WHERE competition_code = %(c)s AND season = %(s)s "
-                        "AND home_team_id = %(h)s AND away_team_id = %(a)s", p).fetchone()[0]
+                        "AND home_team_id = %(h)s AND away_team_id = %(a)s "
+                        "AND leg_date IS NOT DISTINCT FROM %(ld)s::date", p).fetchone()[0]
 
 
 def upsert_result(conn, resolve: TeamResolver, m, source: str, fetched_at: datetime) -> int:

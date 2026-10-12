@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { binFor, disagreement, restDays, sortFixtures, standings, summarise, teamForm, uncertainty } from "./analysis";
+import { binFor, disagreement, staleDays, restDays, sortFixtures, standings, summarise, teamForm, uncertainty } from "./analysis";
 import type { Fixture, Result } from "./types";
 
 // Test-only example teams and scores.
@@ -62,7 +62,7 @@ describe("binFor", () => {
 describe("sortFixtures", () => {
   const fx = (id: number, kickoff: string, home: number, draw: number, away: number, goals?: number): Fixture => ({
     id, competition: "XX", competitionName: "Example", season: "2627", kickoff, playedOn: kickoff.slice(0, 10), status: "TIMED",
-    homeId: id * 10, awayId: id * 10 + 1, home: `H${id}`, away: `A${id}`, fixtureSource: null, fixtureFetchedAt: null,
+    homeId: id * 10, awayId: id * 10 + 1, home: `H${id}`, away: `A${id}`, fixtureSource: null, fixtureFetchedAt: null, leagueLatestResult: null,
     predictions: { dixon_coles: { home, draw, away, expHome: goals ?? null, expAway: goals ? 1 : null, over15: null, over25: null, over35: null, btts: null, createdAt: "", dataCutoff: "", nTrain: 0, version: "t" } },
   });
   const list = [
@@ -75,5 +75,13 @@ describe("sortFixtures", () => {
     expect(sortFixtures(list, "uncertain").map((f) => f.id)).toEqual([2, 1, 3]);
     expect(sortFixtures(list, "favourite").map((f) => f.id)).toEqual([1, 2, 3]);
     expect(sortFixtures(list, "goals").map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("staleDays", () => {
+  it("flags leagues whose latest result is 10+ days before kick-off", () => {
+    expect(staleDays("2026-09-20", "2026-10-17T14:00:00Z")).toBe(27);
+    expect(staleDays("2026-10-12", "2026-10-17T14:00:00Z")).toBeNull();
+    expect(staleDays(null, "2026-10-17T14:00:00Z")).toBeNull();
   });
 });

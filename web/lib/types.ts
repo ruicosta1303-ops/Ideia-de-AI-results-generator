@@ -31,6 +31,7 @@ export interface Fixture {
   fixtureSource: string | null;
   fixtureFetchedAt: string | null;
   predictions: Partial<Record<ModelName, Prediction>>;
+  leagueLatestResult: string | null;
 }
 
 export interface Result {

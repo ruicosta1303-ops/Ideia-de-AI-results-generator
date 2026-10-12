@@ -1,4 +1,42 @@
-# Backtest results — model 0.2.0 (run of 2026-10-11)
+# Backtest results — model 0.2.0
+
+## 17 leagues (run of 2026-10-12)
+
+Same walk-forward test (every forecast uses only earlier matches, weekly refits,
+every finished match since 2023-07-01 included). Log loss — lower is better.
+
+| League | n | League average | Dixon–Coles | Elo | Market (benchmark) |
+|---|---|---|---|---|---|
+| **All 17 leagues** | **15,672** | 1.074 | **0.992** | **0.992** | 0.970 |
+| Premier League | 1,199 | 1.076 | 0.984 | 0.987 | 0.964 |
+| La Liga | 1,219 | 1.066 | 0.972 | 0.967 | 0.952 |
+| Bundesliga | 963 | 1.079 | 0.991 | 0.988 | 0.961 |
+| Serie A | 1,200 | 1.088 | 0.984 | 0.982 | 0.964 |
+| Ligue 1 | 972 | 1.068 | 1.004 | 1.003 | 0.984 |
+| Primeira Liga | 988 | 1.080 | 0.937 | 0.930 | 0.914 |
+| Eredivisie | 990 | 1.076 | 0.961 | 0.958 | 0.940 |
+| Belgian Pro League | 998 | 1.080 | 1.006 | 1.007 | 0.987 |
+| Süper Lig | 1,082 | 1.067 | 0.987 | 0.984 | 0.946 |
+| Super League Greece | 744 | 1.082 | 0.953 | 0.959 | 0.931 |
+| Scottish Premiership | 726 | 1.070 | 0.970 | 0.973 | 0.955 |
+| Austrian Bundesliga | 621 | 1.085 | 1.033 | 1.032 | 1.017 |
+| Swiss Super League | 740 | 1.071 | 1.038 | 1.040 | 1.022 |
+| Danish Superliga | 631 | 1.079 | 1.023 | 1.023 | 1.001 |
+| Ekstraklasa | 996 | 1.073 | 1.057 | 1.058 | 1.046 |
+| Eliteserien | 803 | 1.046 | 0.983 | 0.987 | 0.952 |
+| Allsvenskan | 800 | 1.065 | 1.020 | 1.022 | 0.998 |
+
+* Both models beat league averages in every league and are worse than the closing market
+  in every league. The smallest gain is in Poland (1.057 vs 1.073): a more even league.
+* The Dixon–Coles shrinkage strength (4) was chosen on the original 7 leagues' 2022/23
+  season and applied unchanged to the new leagues — it was not tuned on these results.
+* Caveat for the 10 new leagues: their results are published by football-data.co.uk with a
+  delay (up to ~3 weeks for the extra leagues), and their fixture files only list the
+  next round. The backtest uses complete history, so it does **not** measure the extra
+  error from forecasting with delayed data; the website warns when a league's latest
+  result is 10+ days old.
+
+## Original 7 leagues (run of 2026-10-11)
 
 Walk-forward test: every forecast was made using only matches played before
 it (weekly refits). **All 7,529** finished league matches from 2023-07-01 to

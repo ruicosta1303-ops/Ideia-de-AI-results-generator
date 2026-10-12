@@ -80,3 +80,15 @@ def test_valid_prediction_is_stored(conn):
     db.insert_prediction(conn, mid, run, match_markets(1.4, 1.1))
     p = conn.execute("SELECT p_home + p_draw + p_away, p_over_2_5 FROM predictions").fetchone()
     assert p[0] == pytest.approx(1.0) and 0 < p[1] < 1
+
+
+def test_repeated_meetings_are_separate_matches_in_csv_only_leagues(conn):
+    """Split/play-off leagues: the same home-away pairing twice in one season (test-only names)."""
+    db.load_aliases(conn, [("csv", "Club A", "Club A"), ("csv", "Club B", "Club B")])
+    r = db.TeamResolver(conn)
+    first = HistoricalMatch("SC0", "2627", date(2026, 9, 1), "Club A", "Club B", 1, 0, None, None, None, None, None, None)
+    second = HistoricalMatch("SC0", "2627", date(2027, 4, 20), "Club A", "Club B", 2, 2, None, None, None, None, None, None)
+    a = db.upsert_result(conn, r, first, "csv", db.now())
+    b = db.upsert_result(conn, r, second, "csv", db.now())
+    assert a != b and count(conn, "matches") == 2
+    assert db.upsert_result(conn, r, second, "csv", db.now()) == b  # still idempotent

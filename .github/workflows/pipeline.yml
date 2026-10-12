@@ -1,7 +1,8 @@
 name: Pipeline
 # Downloads real data, forecasts upcoming matches and (weekly, or on demand) re-runs
-# the walk-forward backtest. Uses the DATABASE_URL secret when it is set (permanent
-# database); otherwise a temporary database that exists only during the job.
+# the walk-forward backtest. Only the main branch writes to the permanent database
+# (DATABASE_URL secret); every other branch runs against a temporary database that
+# exists only during the job, so changes can be tested on real data safely.
 on:
   workflow_dispatch:
     inputs:
@@ -25,7 +26,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16
@@ -45,10 +46,10 @@ jobs:
       - run: uv sync
       - name: Run pipeline
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
+          DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
           FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
           DAILY_ONLY: ${{ github.event.schedule == '47 5 * * *' || (github.event_name == 'workflow_dispatch' && !inputs.backtest) }}
-          HAS_PERMANENT_DB: ${{ secrets.DATABASE_URL != '' }}
+          HAS_PERMANENT_DB: ${{ github.ref == 'refs/heads/main' && secrets.DATABASE_URL != '' }}
         run: |
           echo "Permanent database configured: $HAS_PERMANENT_DB"
           if [ "$DAILY_ONLY" = "true" ]; then
@@ -58,7 +59,7 @@ jobs:
           fi
       - name: Database status
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
+          DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.DATABASE_URL || 'postgresql://sports:sports@localhost:5432/sports' }}
         run: uv run python -m sportsmodel.db_status
       - if: always()
         name: Show report

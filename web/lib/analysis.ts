@@ -177,3 +177,12 @@ export function binFor(p: number, bins: CalibrationBin[]): CalibrationBin | null
 export function pct(x: number | null | undefined, digits = 0): string {
   return x == null ? "–" : `${(100 * x).toFixed(digits)}%`;
 }
+
+/** A league's results are "stale" when its latest recorded result is this many days before kick-off. */
+export const STALE_DAYS = 10;
+
+export function staleDays(latestResult: string | null, kickoff: string | null): number | null {
+  if (!latestResult || !kickoff) return null;
+  const d = Math.floor((Date.parse(kickoff.slice(0, 10)) - Date.parse(latestResult)) / 86_400_000);
+  return d >= STALE_DAYS ? d : null;
+}

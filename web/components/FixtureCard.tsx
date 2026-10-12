@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { pct, PRIMARY_MODEL } from "@/lib/analysis";
+import { pct, PRIMARY_MODEL, staleDays } from "@/lib/analysis";
 import type { Fixture } from "@/lib/types";
 import { LocalTime } from "./LocalTime";
 import { ProbabilityBar } from "./ProbabilityBar";
@@ -7,6 +7,7 @@ import { ProbabilityBar } from "./ProbabilityBar";
 export function FixtureCard({ f, selectable = false }: { f: Fixture; selectable?: boolean }) {
   const p = f.predictions[PRIMARY_MODEL];
   const elo = f.predictions.elo;
+  const stale = staleDays(f.leagueLatestResult, f.kickoff);
   return (
     <article className="relative rounded-lg border border-border bg-surface-1 p-3 hover:border-secondary/40">
       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted">
@@ -44,6 +45,11 @@ export function FixtureCard({ f, selectable = false }: { f: Fixture; selectable?
         </>
       ) : (
         <p className="text-xs text-warn">Forecast not available yet for this fixture.</p>
+      )}
+      {stale != null && (
+        <p className="mt-2 text-xs text-warn" title={`Latest result in our data for this league: ${f.leagueLatestResult}`}>
+          ⚠ League results {stale} days old — recent matches not yet in the model
+        </p>
       )}
     </article>
   );
