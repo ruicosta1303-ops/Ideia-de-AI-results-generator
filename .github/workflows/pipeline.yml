@@ -13,6 +13,8 @@ on:
     - cron: "47 5 * * *"   # every day 05:47 UTC: new data + forecasts
     - cron: "17 4 * * 1"   # Mondays 04:17 UTC: full backtest
   push:
+    # only main writes to the production database; other branches are checked by CI
+    branches: [main]
     paths:
       - "engine/src/**"
       - "engine/data/**"
