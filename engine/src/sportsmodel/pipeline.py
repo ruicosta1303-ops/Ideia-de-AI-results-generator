@@ -24,6 +24,9 @@ from .providers.football_data_org import FootballDataOrg
 from .teams import CSV, csv_only_aliases, historical_only_aliases, load_mapping
 
 UPCOMING = {"SCHEDULED", "TIMED"}
+# Forecasts are only made for matches starting at least this long after the run starts: a run takes
+# minutes, and the database rejects any live forecast stored at or after kick-off.
+MIN_LEAD = timedelta(hours=2)
 MODEL_CONFIG = Path(__file__).resolve().parents[2] / "data" / "model_config.json"
 
 
@@ -107,6 +110,11 @@ def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg | None) ->
     conn.commit()
 
     fixture_counts: dict[str, int] = defaultdict(int)
+    fixture_dates: dict[str, list[str]] = {}
+    for f in csv_fixtures:
+        d = f.kickoff_utc.isoformat()[:16]
+        lo, hi = fixture_dates.get(f.competition_code, [d, d])
+        fixture_dates[f.competition_code] = [min(lo, d), max(hi, d)]
     for comp in api_comps:
         fixtures = api.season_matches(comp, start)
         db.upsert_fixtures(conn, resolve, fixtures, current_api)
@@ -119,7 +127,7 @@ def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg | None) ->
         db.upsert_fixtures(conn, resolve, fs, season)
     conn.commit()
     return {"csv_seasons": {f"{c} {s}": len(r) for (c, s), r in sorted(history.items())},
-            "fixtures": dict(fixture_counts), "problems": problems, "unchanged_seasons_skipped": len(skipped),
+            "fixtures": dict(fixture_counts), "csv_fixture_kickoffs_utc": fixture_dates, "problems": problems, "unchanged_seasons_skipped": len(skipped),
             "fetched_at": fetched_at.isoformat()}
 
 
@@ -137,7 +145,7 @@ def load_records(conn, comp: str, now: datetime, horizon_days: int = 14) -> list
         """, (comp,)).fetchall()
     out = []
     for mid, played_on, kickoff, status, home, away, hg, ag, oh, od, oa in rows:
-        if hg is None and not (status in UPCOMING and kickoff and now < kickoff <= now + timedelta(days=horizon_days)):
+        if hg is None and not (status in UPCOMING and kickoff and now + MIN_LEAD < kickoff <= now + timedelta(days=horizon_days)):
             continue  # postponed / in play / too far ahead: neither a result nor a fixture to forecast now
         out.append(MatchRecord(mid, comp, played_on, home, away, hg, ag,
                                (float(oh), float(od), float(oa)) if oh is not None else None))
