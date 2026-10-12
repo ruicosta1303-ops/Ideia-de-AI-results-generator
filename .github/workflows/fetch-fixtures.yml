@@ -1,0 +1,31 @@
+name: Fetch fixtures
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "engine/src/sportsmodel/providers/**"
+      - "engine/src/sportsmodel/fetch_fixtures.py"
+      - ".github/workflows/fetch-fixtures.yml"
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+        shell: bash  # runs with -eo pipefail, so a failed fetch fails the job
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Fetch next 7 days from football-data.org
+        env:
+          FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
+        run: uv run python -m sportsmodel.fetch_fixtures --days 7 --out fixtures.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixtures
+          path: engine/fixtures.json

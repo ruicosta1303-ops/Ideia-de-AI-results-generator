@@ -1,0 +1,42 @@
+name: Tune
+# Chooses model hyper-parameters on the validation season (2022/23).
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "engine/src/sportsmodel/tune.py"
+      - ".github/workflows/tune.yml"
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sports
+          POSTGRES_PASSWORD: sports
+          POSTGRES_DB: sports
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U sports" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Tune on validation period
+        env:
+          DATABASE_URL: postgresql://sports:sports@localhost:5432/sports
+          FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
+        run: uv run python -m sportsmodel.tune
+      - uses: actions/upload-artifact@v4
+        with:
+          name: export
+          path: engine/export/
