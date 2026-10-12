@@ -25,3 +25,41 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sports
+          POSTGRES_PASSWORD: sports
+          POSTGRES_DB: sports
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U sports" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://sports:sports@localhost:5432/sports
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Create schema (empty database) for the build
+        working-directory: engine
+        run: uv sync && uv run python -c "from sportsmodel import db; db.migrate(db.connect())"
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npx next typegen && npm run typecheck && npm run lint && npm test
+      - working-directory: web
+        run: npm run build
+      - name: No database credentials in browser code
+        working-directory: web
+        run: |
+          if grep -rlE 'DATABASE_URL|postgresql://' .next/static/; then
+            echo "Database connection details found in client bundle"; exit 1
+          fi
