@@ -124,8 +124,8 @@ def fetch(url: str) -> str:
             if e.code == 404:
                 raise ProviderError(f"{url} not found (season not published?)") from None
             err = f"HTTP {e.code}"
-        except urllib.error.URLError as e:
-            err = str(e.reason)
+        except OSError as e:  # URLError, and timeouts raised while reading the response
+            err = str(getattr(e, "reason", e))
         time.sleep(2 ** (attempt + 1))
     raise ProviderError(f"could not download {url}: {err}")
 
