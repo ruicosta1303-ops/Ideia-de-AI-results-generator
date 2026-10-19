@@ -22,7 +22,9 @@ const FIXTURE_COLUMNS = `
   (to_json(m.kickoff_utc) #>> '{}') AS kickoff, m.played_on::text AS "playedOn", m.status,
   m.home_team_id AS "homeId", m.away_team_id AS "awayId", th.name AS home, ta.name AS away,
   m.fixture_source AS "fixtureSource", (to_json(m.fixture_fetched_at) #>> '{}') AS "fixtureFetchedAt",
-  coalesce((SELECT json_object_agg(l.model, l.pred) FROM live l WHERE l.match_id = m.id), '{}'::json) AS predictions`;
+  coalesce((SELECT json_object_agg(l.model, l.pred) FROM live l WHERE l.match_id = m.id), '{}'::json) AS predictions,
+  (SELECT max(x.played_on)::text FROM matches x
+    WHERE x.competition_code = m.competition_code AND x.home_goals IS NOT NULL) AS "leagueLatestResult"`;
 
 const FROM_MATCHES = `
   FROM matches m

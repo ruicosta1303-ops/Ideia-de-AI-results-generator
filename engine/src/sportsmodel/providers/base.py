@@ -22,11 +22,12 @@ class Fixture:
     matchday: int | None
     source_last_updated: datetime | None
     fetched_at: datetime
+    leg_date: date | None = None  # match date as published by the source (CSV-only leagues)
 
     def to_json(self) -> dict:
         d = asdict(self)
         for k, v in d.items():
-            if isinstance(v, datetime):
+            if isinstance(v, (datetime, date)):
                 d[k] = v.isoformat()
         return d
 

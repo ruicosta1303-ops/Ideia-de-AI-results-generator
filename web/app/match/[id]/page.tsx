@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import {
-  binFor, disagreement, pct, PRIMARY_MODEL, restDays, standings, summarise, teamForm, uncertainty, type FormEntry,
+  binFor, disagreement, pct, PRIMARY_MODEL, restDays, staleDays, standings, summarise, teamForm, uncertainty, type FormEntry,
 } from "@/lib/analysis";
 import { DatabaseNotConfigured } from "@/lib/db";
 import { getHeadToHead, getLatestEvaluation, getMatch, getRecentResults, getSeasonResults } from "@/lib/queries";
@@ -50,6 +50,7 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
   const dc = m.predictions[PRIMARY_MODEL];
   const metrics = evaluation?.report?.[m.competition]?.dixon_coles ?? evaluation?.report?.ALL?.dixon_coles;
   const finished = m.homeGoals != null;
+  const stale = finished ? null : staleDays(m.leagueLatestResult, m.kickoff);
 
   return (
     <div className="space-y-4">
@@ -71,6 +72,13 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
           Fixture source {m.fixtureSource ?? "–"}, fetched <LocalTime iso={m.fixtureFetchedAt} />
         </p>
       </div>
+
+      {stale != null && (
+        <div className="rounded-lg border border-warn/50 bg-warn/10 p-3 text-sm text-warn">
+          ⚠ The latest {m.competitionName} result in our data is from {m.leagueLatestResult} ({stale} days before this match).
+          Matches played since then are not in the model yet, so recent form and ratings may be out of date.
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel kind="model" title="Outcome probabilities">

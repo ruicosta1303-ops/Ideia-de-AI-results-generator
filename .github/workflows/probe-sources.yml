@@ -1,0 +1,21 @@
+name: Probe data sources
+on:
+  workflow_dispatch:  # manual only (Actions tab -> Run workflow), so it never displaces the pipeline in the queue
+# football-data.org allows 10 requests/minute per token: never run two of these jobs at once
+concurrency:
+  group: football-data-org
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - env:
+          FOOTBALL_DATA_ORG_TOKEN: ${{ secrets.FOOTBALL_DATA_ORG_TOKEN }}
+        run: uv run python -m sportsmodel.probe_sources

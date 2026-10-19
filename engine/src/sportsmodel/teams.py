@@ -50,3 +50,28 @@ def historical_only_aliases(csv_names_by_season: dict[str, set[str]], current_se
             raise TeamMappingError(f"historical name {n!r} collides with a canonical team name")
         out.append((CSV, n, n))
     return out
+
+
+def csv_only_aliases(names_by_comp: dict[str, set[str]], other_csv_names: dict[str, set[str]],
+                     mapping: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    """Aliases for leagues whose results and fixtures both come from football-data.co.uk.
+
+    Every team keeps its CSV name as identity. Because aliases are keyed by name only, the
+    same name in two different competitions would silently merge two clubs, so that is an
+    error unless team_aliases.csv maps it explicitly.
+    """
+    mapped = {n for s, n, _ in mapping if s == CSV}
+    canonical = {c for _, _, c in mapping}
+    seen: dict[str, str] = {}
+    for comp, names in {**other_csv_names, **names_by_comp}.items():
+        for n in names - mapped:
+            if n in seen and seen[n] != comp:
+                raise TeamMappingError(f"team name {n!r} appears in both {seen[n]} and {comp}; map it in team_aliases.csv")
+            seen[n] = comp
+    out = []
+    for comp, names in sorted(names_by_comp.items()):
+        for n in sorted(names - mapped):
+            if n in canonical:
+                raise TeamMappingError(f"{comp} team {n!r} collides with a canonical team name")
+            out.append((CSV, n, n))
+    return out
