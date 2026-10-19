@@ -68,3 +68,32 @@ def test_fixture_files_convert_uk_time_to_utc():
     [g] = parse_fixtures(extra, {"Austria": "AUT"}, "Country", fetched)
     assert g.kickoff_utc == datetime(2026, 11, 7, 14, 0, tzinfo=timezone.utc)  # GMT = UTC
     assert g.competition_code == "AUT" and (g.home_team, g.away_team) == ("Club C", "Club A")
+
+
+def test_fetch_retries_read_timeouts_then_reports_provider_error(monkeypatch):
+    import io
+
+    import pytest
+
+    from sportsmodel.providers import football_data_csv as csvsrc
+    from sportsmodel.providers.base import ProviderError
+
+    calls = []
+
+    def flaky(req, timeout):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise TimeoutError("The read operation timed out")
+        return io.BytesIO(b"Div,Date\n")
+
+    monkeypatch.setattr(csvsrc.time, "sleep", lambda s: None)
+    monkeypatch.setattr(csvsrc.urllib.request, "urlopen", flaky)
+    assert csvsrc.fetch("https://example.test/a.csv") == "Div,Date\n"
+    assert len(calls) == 2
+
+    def always_slow(req, timeout):
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(csvsrc.urllib.request, "urlopen", always_slow)
+    with pytest.raises(ProviderError, match="timed out"):
+        csvsrc.fetch("https://example.test/a.csv")
