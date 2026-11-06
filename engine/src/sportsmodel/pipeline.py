@@ -305,7 +305,9 @@ def run_cup(conn, cup: str, domestic: list[MatchRecord], now: datetime, settings
         store(conn, bt, "backtest")
     store(conn, shown, "live", cutoff_ts=now)
     log(f"{cup}: {len(recs)} matches, {len(bt) // 3} backtested, {len(live) // 3} upcoming, "
-        f"vs base rate {gate}; live forecasts {'stored' if shown else 'NOT stored (model not clearly better)'}")
+        f"vs base rate {gate}; " + (f"{len(shown)} live forecasts stored" if shown else
+                                     "clearly better, but no fixture in the forecast window" if gate["clearly_better"] else
+                                     "live forecasts NOT shown (model not clearly better)"))
     return {"live": shown, "report": report}
 
 

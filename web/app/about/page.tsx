@@ -7,7 +7,7 @@ export default function Page() {
       <Panel kind="fact" title="Data sources">
         <ul className="list-disc space-y-1 pl-5">
           <li><b className="text-primary">football-data.co.uk</b> — historical league results and bookmaker closing odds for every league; for Belgium, Turkey, Greece, Scotland, Austria, Switzerland, Denmark, Poland, Norway and Sweden also the upcoming round. Odds are used only to benchmark the models, never as model input.</li>
-          <li><b className="text-primary">football-data.org</b> — fixtures, kick-off times and current-season results for England, Spain, Germany, Italy, France, Portugal and the Netherlands.</li>
+          <li><b className="text-primary">football-data.org</b> — fixtures, kick-off times and current-season results for England, Spain, Germany, Italy, France, Portugal and the Netherlands, and all UEFA Champions League matches since 2023/24.</li>
           <li>Results for some leagues are published with a delay of up to a few weeks; fixtures then carry a warning that recent matches are not yet in the model.</li>
           <li>Not available (shown as “Data unavailable”): injuries, suspensions, lineups, shot-based xG, cup and European matches.</li>
           <li>Data is refreshed once a day; every page shows when it was last updated.</li>

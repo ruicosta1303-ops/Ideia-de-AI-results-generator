@@ -36,6 +36,30 @@ every finished match since 2023-07-01 included). Log loss — lower is better.
   error from forecasting with delayed data; the website warns when a league's latest
   result is 10+ days old.
 
+## Champions League (run of 2026-11-06, cross-league model)
+
+Walk-forward over every Champions League match since 2023/24 (575 finished matches,
+90-minute results; football-data.org's free plan has no earlier seasons). Every forecast
+uses only domestic and European results from before the match.
+
+| Model | n | Log loss | Brier | RPS | Most likely right | Calib. error |
+|---|---|---|---|---|---|---|
+| Champions League average (base rate) | 575 | 1.016 | 0.614 | 0.2377 | 48.9% | 2.1% |
+| Elo, all leagues treated as equal | 575 | 0.987 | 0.590 | 0.2253 | 51.1% | 2.1% |
+| **Cross-league Elo** | 575 | **0.949** | **0.557** | **0.2093** | **56.5%** | 4.6% |
+
+* Versus the base rate the log loss falls by 0.067 per match, 95% bootstrap interval
+  0.019 to 0.117: the whole interval favours the model, so its forecasts are shown on the
+  site. The gate is re-checked on every run; forecasts disappear if it stops holding.
+* Learning a strength offset per league is what helps: treating all leagues as equal gains
+  much less (0.987).
+* Calibration error is higher than for the league models (4.6%), and there are no closing
+  odds for these matches, so there is no market benchmark.
+* Clubs from leagues we do not cover (Serbia, Ukraine, Czechia, Croatia, Slovakia,
+  Kazakhstan, Cyprus, Azerbaijan) are rated as average members of one "other leagues" group.
+* The first matches of 2023/24 were forecast before enough European matches existed to
+  learn the offsets (all leagues equal then); they are included, not filtered out.
+
 ## Original 7 leagues (run of 2026-10-11)
 
 Walk-forward test: every forecast was made using only matches played before
