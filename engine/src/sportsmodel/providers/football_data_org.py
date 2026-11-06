@@ -92,8 +92,8 @@ class FootballDataOrg:
                     self._sleep(rate_limit_wait(detail, e.headers.get("X-RequestCounter-Reset")))
                     continue
                 raise ProviderError(f"football-data.org returned HTTP {e.code} for {path}: {detail}") from None
-            except urllib.error.URLError as e:
-                raise ProviderError(f"could not reach football-data.org: {e.reason}") from None
+            except OSError as e:  # URLError, and timeouts raised while reading the response
+                raise ProviderError(f"could not reach football-data.org: {getattr(e, 'reason', e)}") from None
         raise AssertionError("unreachable")
 
     def team_names(self, competition: str) -> list[str]:
