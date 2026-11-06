@@ -42,7 +42,11 @@ def _parse_dt(value: str | None) -> datetime | None:
 def parse_matches(payload: dict, fetched_at: datetime) -> list[Fixture]:
     fixtures = []
     for m in payload.get("matches", []):
-        full_time = (m.get("score") or {}).get("fullTime") or {}
+        score = m.get("score") or {}
+        # after extra time fullTime includes extra-time goals (and, in some payloads, the shoot-out);
+        # forecasts are for the 90-minute result
+        full_time = (score.get("regularTime") if score.get("duration") in ("EXTRA_TIME", "PENALTY_SHOOTOUT")
+                     else None) or score.get("fullTime") or {}
         comp = m.get("competition") or {}
         fixtures.append(
             Fixture(
@@ -59,6 +63,7 @@ def parse_matches(payload: dict, fetched_at: datetime) -> list[Fixture]:
                 matchday=m.get("matchday"),
                 source_last_updated=_parse_dt(m.get("lastUpdated")),
                 fetched_at=fetched_at,
+                stage=m.get("stage"),
             )
         )
     return fixtures

@@ -145,3 +145,83 @@ def test_pipeline_csv_only_league_with_repeated_meetings(conn, monkeypatch, tmp_
                         "GROUP BY season, home_team_id, away_team_id HAVING count(*) > 1) x").fetchone()[0]
         assert dup > 0  # repeated meetings kept as separate matches
         assert c.execute("SELECT count(*) FROM matches WHERE competition_code = 'AUT' AND leg_date IS NULL").fetchone()[0] == 0
+
+
+def test_pipeline_champions_league(conn, monkeypatch, tmp_path):
+    """Cup matches between league clubs and a club from an uncovered league. SYNTHETIC test-only data."""
+    url = URL.rsplit("/", 1)[0] + "/" + conn.info.dbname
+    monkeypatch.setenv("DATABASE_URL", url)
+    start_year = current_season_start(TODAY)
+    kick_up = datetime.combine(TODAY + timedelta(days=4), datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=20)
+    state = {"shift": 0}
+
+    class CupApi(FakeApi):
+        def season_matches(self, comp, year):
+            if comp != "CL":
+                return super().season_matches(comp, year)
+            rng = np.random.default_rng(year)
+            out, now = [], datetime.now(timezone.utc)
+            for i in range(60):
+                w, j = divmod(i, 5)
+                k = datetime(year, 9, 15, 20, tzinfo=timezone.utc) + timedelta(days=7 * w)
+                if k.date() >= TODAY - timedelta(days=1):
+                    break
+                h, a = (2 * j + w) % 10, (2 * j + 1 + w) % 10  # each club plays once a week
+                home = "Faraway FC" if j == 0 else f"{TEAMS[h]} FC"
+                out.append(Fixture(API, f"{year}-{i}", "CL", "Champions League", k, "FINISHED", home,
+                                   f"{TEAMS[a]} FC", int(rng.poisson(1.4)), int(rng.poisson(1.1)), None, None, now,
+                                   stage="LEAGUE_STAGE"))
+            if year == start_year:
+                out.append(Fixture(API, "up-1", "CL", "Champions League", kick_up + timedelta(days=state["shift"]),
+                                   "TIMED", f"{TEAMS[2]} FC", "Faraway FC", None, None, None, None, now, stage="FINAL"))
+            return out
+
+    monkeypatch.setattr(pipeline, "FootballDataOrg", CupApi)
+    monkeypatch.setattr(pipeline.csvsrc, "results", lambda comp, s: synthetic_season(s))
+    mapping = [(s, n, f"{t} FC") for t in TEAMS for s, n in ((API, f"{t} FC"), (CSV, t))]
+    monkeypatch.setattr(pipeline, "load_mapping", lambda: mapping)
+    monkeypatch.setattr(pipeline, "load_cup_mapping", lambda m: [(API, "Faraway FC", "Faraway FC")])
+
+    test_from = (TODAY - timedelta(days=500)).isoformat()
+    args = ["--competitions", "PL", "--seasons", "4", "--test-from", test_from, "--out", str(tmp_path)]
+    assert pipeline.main(args) == 0
+    out = json.loads((tmp_path / "latest.json").read_text())
+    cl = out["evaluation"]["CL"]
+    assert set(cl) == {"base_rate", "same_level_elo", "cross_league_elo"}
+    assert cl["cross_league_elo"]["n"] == cl["base_rate"]["n"] > 20
+    gate = cl["cross_league_elo"]["vs_base_rate"]
+    shown = [u for u in out["upcoming"] if u["competition"] == "CL"]
+    assert len(shown) == (1 if gate["clearly_better"] else 0)  # shown only when clearly better
+
+    with psycopg.connect(url) as c:
+        n = c.execute("SELECT count(*) FROM matches WHERE competition_code = 'CL'").fetchone()[0]
+        assert c.execute("SELECT stage FROM matches WHERE fixture_source_id = 'up-1'").fetchone()[0] == "FINAL"
+    state["shift"] = 1  # the final is rescheduled: same provider id, new date -> same match row
+    assert pipeline.main(args + ["--skip-backtest"]) == 0
+    with psycopg.connect(url) as c:
+        assert c.execute("SELECT count(*) FROM matches WHERE competition_code = 'CL'").fetchone()[0] == n
+        assert c.execute("SELECT played_on FROM matches WHERE fixture_source_id = 'up-1'").fetchone()[0] == \
+            (kick_up + timedelta(days=1)).date()
+
+
+def test_pipeline_skips_cup_with_unmapped_teams(conn, monkeypatch, tmp_path):
+    url = URL.rsplit("/", 1)[0] + "/" + conn.info.dbname
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    class CupApi(FakeApi):
+        def season_matches(self, comp, year):
+            if comp != "CL":
+                return super().season_matches(comp, year)
+            k = datetime(year, 9, 15, 20, tzinfo=timezone.utc)
+            return [Fixture(API, f"{year}", "CL", "Champions League", k, "FINISHED", "Nobody Knows FC",
+                            f"{TEAMS[1]} FC", 1, 0, None, None, datetime.now(timezone.utc))]
+
+    monkeypatch.setattr(pipeline, "FootballDataOrg", CupApi)
+    monkeypatch.setattr(pipeline.csvsrc, "results", lambda comp, s: synthetic_season(s))
+    mapping = [(s, n, f"{t} FC") for t in TEAMS for s, n in ((API, f"{t} FC"), (CSV, t))]
+    monkeypatch.setattr(pipeline, "load_mapping", lambda: mapping)
+    monkeypatch.setattr(pipeline, "load_cup_mapping", lambda m: [])
+    assert pipeline.main(["--competitions", "PL", "--seasons", "2", "--skip-backtest", "--out", str(tmp_path)]) == 0
+    out = json.loads((tmp_path / "latest.json").read_text())
+    assert any("Nobody Knows FC" in p for p in out["ingest"]["problems"])  # reported, leagues still updated
+    assert len([u for u in out["upcoming"] if u["competition"] == "PL"]) == 1

@@ -7,6 +7,8 @@ kind
              and the upcoming-round file fixtures.csv
   csv_extra  everything from football-data.co.uk "extra leagues": one file per country
              (new/<code>.csv) and new_league_fixtures.csv
+  cup        a cross-league cup, everything from the football-data.org API; forecast by the
+             cross-league model (cross_league.py), not by the league models
 
 CSV-only leagues often have play-off / split phases in which the same home-away pairing is
 played more than once per season, so their matches are identified by date as well.
@@ -51,13 +53,17 @@ COMPETITIONS: dict[str, Competition] = {c.code: c for c in [
     Competition("SWE", "Allsvenskan", "Sweden", "csv_extra", "SWE", calendar_season=True),
 ]}
 
+CUPS: dict[str, Competition] = {c.code: c for c in [
+    Competition("CL", "UEFA Champions League", "Europe", "cup", ""),
+]}
+
 API_CODES = [c.code for c in COMPETITIONS.values() if c.kind == "api"]
-ALL_CODES = list(COMPETITIONS)
+ALL_CODES = list(COMPETITIONS)  # leagues only; cups are listed in CUPS
 
 
 def get(code: str) -> Competition:
     try:
-        return COMPETITIONS[code]
+        return COMPETITIONS.get(code) or CUPS[code]
     except KeyError:
         raise KeyError(f"unknown competition {code!r}") from None
 

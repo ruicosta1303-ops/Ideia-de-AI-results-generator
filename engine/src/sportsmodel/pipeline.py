@@ -17,11 +17,12 @@ from psycopg.types.json import Jsonb
 from . import competitions, db
 from .backtest import MODEL_VERSION, Forecast, MatchRecord, Run, Settings, market_forecast, walk_forward
 from .discover_teams import current_season_start
-from .evaluate import report as make_report
+from .evaluate import report as make_report, summarize
 from .providers import football_data_csv as csvsrc
 from .providers.base import ProviderError
 from .providers.football_data_org import FootballDataOrg
-from .teams import CSV, csv_only_aliases, historical_only_aliases, load_mapping
+from .cross_league import CupMatch, log_loss_gain, walk_forward_cup
+from .teams import API, CSV, TeamMappingError, csv_only_aliases, historical_only_aliases, load_cup_mapping, load_mapping
 
 UPCOMING = {"SCHEDULED", "TIMED"}
 # Forecasts are only made for matches starting at least this long after the run starts: a run takes
@@ -131,6 +132,54 @@ def ingest(conn, comps: list[str], seasons: int, api: FootballDataOrg | None) ->
             "fetched_at": fetched_at.isoformat()}
 
 
+CUP_SEASONS = 4  # football-data.org's free plan serves Champions League seasons from 2023/24
+
+
+def ingest_cups(conn, cups: list[str], api: FootballDataOrg, today: date) -> dict:
+    """Cup matches from football-data.org. Any problem skips the cups only, never the leagues."""
+    start = current_season_start(today)
+    fetched_at = db.now()
+    out: dict = {"matches": {}, "problems": []}
+    try:
+        db.load_aliases(conn, load_cup_mapping(load_mapping()))
+    except (TeamMappingError, OSError) as e:
+        out["problems"].append(f"cup team mapping: {e}")
+        return out
+    resolve = db.TeamResolver(conn)
+    for cup in cups:
+        seasons = {}
+        for y in range(start - CUP_SEASONS + 1, start + 1):
+            try:
+                seasons[competitions.season_for(cup, y)] = api.season_matches(cup, y)
+            except ProviderError as e:
+                out["problems"].append(f"{cup} {y}/{y + 1}: {e}")
+        unknown = sorted({n for fs in seasons.values() for f in fs for n in (f.home_team, f.away_team)
+                          if n and (API, n) not in resolve._map})
+        if unknown:
+            out["problems"].append(f"{cup}: teams missing from cup_teams.csv, cup not updated: {unknown}")
+            continue
+        for season, fs in seasons.items():
+            db.upsert_cup_fixtures(conn, resolve, [f for f in fs if f.home_team and f.away_team], season)
+            out["matches"][f"{cup} {season}"] = len(fs)
+        conn.commit()
+    return out
+
+
+def load_cup_records(conn, cup: str, now: datetime, horizon_days: int = 14) -> list[CupMatch]:
+    rows = conn.execute(
+        """
+        SELECT m.id, m.played_on, m.kickoff_utc, m.status, th.name, ta.name, m.home_goals, m.away_goals, m.stage
+        FROM matches m JOIN teams th ON th.id = m.home_team_id JOIN teams ta ON ta.id = m.away_team_id
+        WHERE m.competition_code = %s
+        """, (cup,)).fetchall()
+    out = []
+    for mid, played_on, kickoff, status, home, away, hg, ag, stage in rows:
+        if hg is None and not (status in UPCOMING and kickoff and now + MIN_LEAD < kickoff <= now + timedelta(days=horizon_days)):
+            continue
+        out.append(CupMatch(mid, played_on, home, away, hg, ag, neutral=stage == "FINAL"))
+    return out
+
+
 def load_records(conn, comp: str, now: datetime, horizon_days: int = 14) -> list[MatchRecord]:
     rows = conn.execute(
         """
@@ -208,9 +257,39 @@ def export_live(live: list[Forecast], now: datetime) -> list[dict]:
     return [{**meta[k], "models": v} for k, v in by_match.items()]
 
 
+def run_cup(conn, cup: str, domestic: list[MatchRecord], now: datetime, settings: Settings, test_from: date,
+            args) -> dict:
+    """Cross-league backtest and forecasts for one cup. Live forecasts are stored (and shown) only
+    when the backtest shows the model clearly beats the cup base rate; otherwise the site says why."""
+    recs = load_cup_records(conn, cup, now, args.horizon_days)
+    if not any(r.finished for r in recs):
+        log(f"{cup}: no finished matches stored; no forecasts")
+        return {"live": []}
+    bt, live = walk_forward_cup(recs, domestic, test_from, cup, settings, live_cutoff=now.date())
+    by_model: dict[str, list[Forecast]] = defaultdict(list)
+    for f in bt:
+        by_model[f.run.model].append(f)
+    report = {m: summarize(fs) for m, fs in sorted(by_model.items())} if bt else {}
+    gate = log_loss_gain(by_model["cross_league_elo"], by_model["base_rate"]) if bt else {"clearly_better": False}
+    if report:
+        report["cross_league_elo"]["vs_base_rate"] = gate
+        report["cross_league_elo"]["vs_same_level_elo"] = log_loss_gain(by_model["cross_league_elo"],
+                                                                        by_model["same_level_elo"])
+    shown = [f for f in live if f.run.model == "cross_league_elo"] if gate["clearly_better"] else []
+    if not args.skip_backtest:
+        conn.execute("DELETE FROM model_runs WHERE mode = 'backtest' AND model_version = %s "
+                     "AND competition_code = %s", (MODEL_VERSION, cup))
+        store(conn, bt, "backtest")
+    store(conn, shown, "live", cutoff_ts=now)
+    log(f"{cup}: {len(recs)} matches, {len(bt) // 3} backtested, {len(live) // 3} upcoming, "
+        f"vs base rate {gate}; live forecasts {'stored' if shown else 'NOT stored (model not clearly better)'}")
+    return {"live": shown, "report": report}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--competitions", default=",".join(competitions.ALL_CODES))
+    ap.add_argument("--cups", default=",".join(competitions.CUPS), help="cross-league cups; empty for none")
     ap.add_argument("--seasons", type=int, default=8, help="seasons of history to download")
     ap.add_argument("--test-from", default="2023-07-01", help="first date of the backtest")
     ap.add_argument("--horizon-days", type=int, default=14, help="forecast fixtures up to this many days ahead")
@@ -230,12 +309,19 @@ def main(argv=None) -> int:
     except (ProviderError, ValueError) as e:
         print(f"ERROR during ingestion: {e}", file=sys.stderr)
         return 1
+    cups = [c for c in args.cups.split(",") if c]
+    if cups:
+        try:
+            info["cups"] = ingest_cups(conn, cups, api or FootballDataOrg(), date.today())
+        except ProviderError as e:
+            info["cups"] = {"problems": [str(e)]}
+        info["problems"] += info["cups"]["problems"]
     log(f"Ingested: {json.dumps(info, indent=1)}")
 
     settings = load_settings()
     log(f"Settings: {settings}")
     now = db.now()
-    all_bt, all_live, all_mkt = [], [], []
+    all_bt, all_live, all_mkt, all_recs = [], [], [], []
     for comp in comps:
         recs = load_records(conn, comp, now, args.horizon_days)
         # with --skip-backtest the walk-forward starts after the last finished match, so it only forecasts
@@ -253,8 +339,14 @@ def main(argv=None) -> int:
         log(f"{comp}: {len(recs)} matches, {len(bt) // 3} backtested, {len(live) // 3} upcoming forecast, "
             f"{len(mkt)} with closing odds")
         all_bt += bt
+        all_recs += recs
         all_live += live
         all_mkt += mkt
+
+    cup_reports = {}
+    for cup in cups:
+        cup_reports[cup] = run_cup(conn, cup, all_recs, now, settings, test_from, args)
+        all_live += [f for f in cup_reports[cup].pop("live")]
 
     if args.skip_backtest:
         row = conn.execute("SELECT report FROM evaluation_reports WHERE model_version = %s "
@@ -264,6 +356,7 @@ def main(argv=None) -> int:
                                     "no stored evaluation for this model version yet"))
     else:
         rep = make_report(all_bt, all_mkt)
+        rep.update({c: r["report"] for c, r in cup_reports.items() if r.get("report")})
         conn.execute("INSERT INTO evaluation_reports (model_version, test_from, report) VALUES (%s, %s, %s)",
                      (MODEL_VERSION, test_from, Jsonb(rep)))
         conn.commit()

@@ -12,7 +12,7 @@ from psycopg.types.json import Jsonb
 
 MIGRATIONS = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
-from .competitions import COMPETITIONS, get as get_competition
+from .competitions import COMPETITIONS, CUPS, get as get_competition
 
 
 class UnknownTeamError(LookupError):
@@ -51,7 +51,7 @@ def seed_competitions(conn: psycopg.Connection) -> None:
             "INSERT INTO competitions (code, name, csv_division, country, source_kind) VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, csv_division = EXCLUDED.csv_division, "
             "country = EXCLUDED.country, source_kind = EXCLUDED.source_kind",
-            [(c.code, c.name, c.csv_code, c.country, c.kind) for c in COMPETITIONS.values()],
+            [(c.code, c.name, c.csv_code or None, c.country, c.kind) for c in [*COMPETITIONS.values(), *CUPS.values()]],
         )
     conn.commit()
 
@@ -199,6 +199,38 @@ def upsert_fixture(conn, resolve: TeamResolver, f, season: str) -> int:
 def upsert_fixtures(conn, resolve: TeamResolver, fixtures, season: str) -> None:
     with conn.cursor() as cur:
         cur.executemany(_FIXTURE_SQL, [_fixture_params(resolve, f, season) for f in fixtures])
+
+
+_CUP_UPDATE_SQL = """
+    UPDATE matches SET season = %(s)s, home_team_id = %(h)s, away_team_id = %(a)s, played_on = %(d)s,
+        kickoff_utc = %(k)s, status = %(st)s, home_goals = %(hg)s, away_goals = %(ag)s, stage = %(stage)s,
+        leg_date = %(ld)s, fixture_fetched_at = %(fa)s,
+        result_source = CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(src)s END,
+        result_fetched_at = CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(fa)s::timestamptz END
+    WHERE competition_code = %(c)s AND fixture_source = %(src)s AND fixture_source_id = %(sid)s
+"""
+
+_CUP_INSERT_SQL = """
+    INSERT INTO matches (competition_code, season, home_team_id, away_team_id, played_on, kickoff_utc, status,
+                         home_goals, away_goals, stage, leg_date, fixture_source, fixture_source_id,
+                         fixture_fetched_at, result_source, result_fetched_at)
+    SELECT %(c)s, %(s)s, %(h)s, %(a)s, %(d)s, %(k)s, %(st)s, %(hg)s, %(ag)s, %(stage)s, %(ld)s, %(src)s, %(sid)s,
+           %(fa)s, CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(src)s END,
+           CASE WHEN %(hg)s::int IS NULL THEN NULL ELSE %(fa)s::timestamptz END
+    WHERE NOT EXISTS (SELECT 1 FROM matches WHERE competition_code = %(c)s AND fixture_source = %(src)s
+                      AND fixture_source_id = %(sid)s)
+"""
+
+
+def upsert_cup_fixtures(conn, resolve: TeamResolver, fixtures, season: str) -> None:
+    """Cup matches are identified by the provider's match id: the same pairing can meet twice in a
+    season (league phase and knock-out) and a rescheduled match keeps its id but changes date."""
+    params = [dict(_fixture_params(resolve, f, season), stage=f.stage) for f in fixtures]
+    for p in params:
+        p["ld"] = p["d"]
+    with conn.cursor() as cur:
+        cur.executemany(_CUP_UPDATE_SQL, params)
+        cur.executemany(_CUP_INSERT_SQL, params)
 
 
 def create_model_run(conn, model: str, version: str, mode: str, competition: str,

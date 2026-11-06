@@ -23,6 +23,7 @@ class Fixture:
     source_last_updated: datetime | None
     fetched_at: datetime
     leg_date: date | None = None  # match date as published by the source (CSV-only leagues)
+    stage: str | None = None  # cup stage, e.g. LEAGUE_STAGE, FINAL
 
     def to_json(self) -> dict:
         d = asdict(self)
