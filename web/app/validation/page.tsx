@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { pct } from "@/lib/analysis";
+import { CUPS, pct } from "@/lib/analysis";
 import { DatabaseNotConfigured } from "@/lib/db";
 import { getCompetitions, getLatestEvaluation } from "@/lib/queries";
 import { CalibrationChart } from "@/components/CalibrationChart";
@@ -24,11 +24,13 @@ export default function Page() {
   );
 }
 
-const ORDER = ["dixon_coles", "elo", "base_rate", "market_closing (benchmark)"];
+const ORDER = ["dixon_coles", "elo", "cross_league_elo", "same_level_elo", "base_rate", "market_closing (benchmark)"];
 const LABEL: Record<string, string> = {
   dixon_coles: "Dixon–Coles",
   elo: "Elo",
   base_rate: "League average",
+  cross_league_elo: "Cross-league Elo",
+  same_level_elo: "Elo, all leagues treated as equal",
   "market_closing (benchmark)": "Betting market (closing odds) — benchmark",
 };
 
@@ -44,7 +46,8 @@ async function Evaluation() {
   if (!ev) return <Notice>No evaluation has been stored yet. It is produced by the weekly backtest.</Notice>;
   const names = Object.fromEntries(comps.map((c) => [c.code, c.name]));
   const all = ev.report.ALL;
-  const leagues = Object.keys(ev.report).filter((k) => k !== "ALL").sort((a, b) => (names[a] ?? a).localeCompare(names[b] ?? b));
+  const cups = Object.keys(ev.report).filter((k) => CUPS.has(k));
+  const leagues = Object.keys(ev.report).filter((k) => k !== "ALL" && !CUPS.has(k)).sort((a, b) => (names[a] ?? a).localeCompare(names[b] ?? b));
 
   return (
     <div className="space-y-5">
@@ -119,6 +122,31 @@ async function Evaluation() {
         </table>
       </Panel>
 
+      {cups.map((code) => {
+        const gate = ev.report[code].cross_league_elo?.vs_base_rate;
+        const flat = ev.report[code].cross_league_elo?.vs_same_level_elo;
+        return (
+          <Panel key={code} kind="model" title={`${names[code] ?? code} (not in the totals above)`}>
+            <MetricsTable models={ev.report[code]} labels={{ base_rate: "Champions League average" }} />
+            <p className="mt-3 text-xs text-muted">
+              Clubs from different leagues meet here, so domestic ratings are put on one scale with a strength offset per league,
+              learned from earlier European matches. 90-minute results only; there are no closing odds for these matches.
+            </p>
+            {gate && gate.mean != null && (
+              <p className="mt-1 text-xs text-secondary">
+                Versus the Champions League average, log loss changes by {gate.mean.toFixed(3)} per match (95% interval{" "}
+                {gate.low?.toFixed(3)} to {gate.high?.toFixed(3)}, {gate.n} matches).{" "}
+                {gate.clearly_better
+                  ? "The whole interval is below zero, so forecasts are shown."
+                  : "The interval includes zero, so the model is not clearly better and its forecasts are not shown."}
+                {flat?.mean != null &&
+                  ` Against treating all leagues as equal: ${flat.mean.toFixed(3)} (${flat.low?.toFixed(3)} to ${flat.high?.toFixed(3)}).`}
+              </p>
+            )}
+          </Panel>
+        );
+      })}
+
       <h2 className="pt-2 text-base font-semibold">By league</h2>
       <div className="grid gap-4 lg:grid-cols-2">
         {leagues.map((code) => (
@@ -131,7 +159,13 @@ async function Evaluation() {
   );
 }
 
-function MetricsTable({ models }: { models: Record<string, import("@/lib/types").ModelMetrics> }) {
+function MetricsTable({
+  models,
+  labels = {},
+}: {
+  models: Record<string, import("@/lib/types").ModelMetrics>;
+  labels?: Record<string, string>;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm tabular">
@@ -151,7 +185,7 @@ function MetricsTable({ models }: { models: Record<string, import("@/lib/types")
             const m = models[k];
             return (
               <tr key={k} className="border-t border-border">
-                <td className="py-1.5 text-secondary">{LABEL[k] ?? k}</td>
+                <td className="py-1.5 text-secondary">{labels[k] ?? LABEL[k] ?? k}</td>
                 <td className="text-right">{m.n.toLocaleString("en")}</td>
                 <td className="text-right">{m.log_loss.toFixed(3)}</td>
                 <td className="text-right">{m.brier.toFixed(3)}</td>

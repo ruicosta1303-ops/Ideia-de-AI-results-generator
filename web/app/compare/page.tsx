@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { binFor, disagreement, pct, PRIMARY_MODEL, uncertainty } from "@/lib/analysis";
+import { binFor, disagreement, pct, primaryModel, uncertainty } from "@/lib/analysis";
 import { DatabaseNotConfigured } from "@/lib/db";
 import { getFixtures, getLatestEvaluation } from "@/lib/queries";
 import type { Fixture } from "@/lib/types";
@@ -45,9 +45,9 @@ async function Comparison({ searchParams }: { searchParams: PageProps<"/compare"
     { label: "Kick-off", render: (f) => <LocalTime iso={f.kickoff} /> },
     { label: "Competition", render: (f) => f.competitionName },
     {
-      label: "Dixon–Coles 1X2",
+      label: "Main model 1X2",
       render: (f) => {
-        const p = f.predictions[PRIMARY_MODEL];
+        const p = f.predictions[primaryModel(f.competition)];
         return p ? <ProbabilityBar home={p.home} draw={p.draw} away={p.away} compact /> : <span className="text-warn">Data unavailable</span>;
       },
     },
@@ -61,35 +61,35 @@ async function Comparison({ searchParams }: { searchParams: PageProps<"/compare"
     {
       label: "Model expected goals",
       render: (f) => {
-        const p = f.predictions[PRIMARY_MODEL];
+        const p = f.predictions[primaryModel(f.competition)];
         return p?.expHome != null && p.expAway != null ? `${p.expHome.toFixed(2)} – ${p.expAway.toFixed(2)}` : "–";
       },
     },
-    { label: "Over 2.5 goals", render: (f) => pct(f.predictions[PRIMARY_MODEL]?.over25) },
-    { label: "Both teams score", render: (f) => pct(f.predictions[PRIMARY_MODEL]?.btts) },
+    { label: "Over 2.5 goals", render: (f) => pct(f.predictions[primaryModel(f.competition)]?.over25) },
+    { label: "Both teams score", render: (f) => pct(f.predictions[primaryModel(f.competition)]?.btts) },
     {
       label: "Uncertainty",
       render: (f) => {
-        const p = f.predictions[PRIMARY_MODEL];
+        const p = f.predictions[primaryModel(f.competition)];
         return p ? pct(uncertainty(p)) : "–";
       },
     },
-    { label: "Model disagreement", render: (f) => pct(disagreement(f.predictions[PRIMARY_MODEL], f.predictions.elo) ?? undefined) },
+    { label: "Model disagreement", render: (f) => pct(disagreement(f.predictions[primaryModel(f.competition)], f.predictions.elo) ?? undefined) },
     {
       label: "Similar forecasts in testing",
       render: (f) => {
-        const p = f.predictions[PRIMARY_MODEL];
-        const bins = ev?.report?.[f.competition]?.dixon_coles?.calibration_1x2;
+        const p = f.predictions[primaryModel(f.competition)];
+        const bins = ev?.report?.[f.competition]?.[primaryModel(f.competition)]?.calibration_1x2;
         if (!p || !bins) return "–";
         const fav = Math.max(p.home, p.draw, p.away);
         const b = binFor(fav, bins);
-        return b ? `Favourite at ${pct(b.lower)}–${pct(b.upper)} happened ${pct(b.observed_rate)} (n=${b.count}, this league)` : "–";
+        return b ? `Favourite at ${pct(b.lower)}–${pct(b.upper)} happened ${pct(b.observed_rate)} (n=${b.count}, this competition)` : "–";
       },
     },
     {
       label: "Data used",
       render: (f) => {
-        const p = f.predictions[PRIMARY_MODEL];
+        const p = f.predictions[primaryModel(f.competition)];
         return p ? `${p.nTrain.toLocaleString("en")} matches up to ${p.dataCutoff.slice(0, 10)}; no injuries/lineups/xG` : "–";
       },
     },

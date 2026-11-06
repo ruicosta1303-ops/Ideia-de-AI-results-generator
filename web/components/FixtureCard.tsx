@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { pct, PRIMARY_MODEL, staleDays } from "@/lib/analysis";
+import { CUPS, pct, primaryModel, staleDays } from "@/lib/analysis";
 import type { Fixture } from "@/lib/types";
 import { LocalTime } from "./LocalTime";
 import { ProbabilityBar } from "./ProbabilityBar";
 
 export function FixtureCard({ f, selectable = false }: { f: Fixture; selectable?: boolean }) {
-  const p = f.predictions[PRIMARY_MODEL];
+  const p = f.predictions[primaryModel(f.competition)];
   const elo = f.predictions.elo;
   const stale = staleDays(f.leagueLatestResult, f.kickoff);
   return (
@@ -32,10 +32,12 @@ export function FixtureCard({ f, selectable = false }: { f: Fixture; selectable?
         <>
           <ProbabilityBar home={p.home} draw={p.draw} away={p.away} compact />
           <div className="mt-2 flex flex-wrap justify-between gap-x-3 text-xs text-muted tabular">
-            <span>
-              Exp. goals {p.expHome?.toFixed(2)}–{p.expAway?.toFixed(2)}
-            </span>
-            <span>Over 2.5 {pct(p.over25)}</span>
+            {p.expHome != null && p.expAway != null && (
+              <span>
+                Exp. goals {p.expHome.toFixed(2)}–{p.expAway.toFixed(2)}
+              </span>
+            )}
+            {p.over25 != null && <span>Over 2.5 {pct(p.over25)}</span>}
             {elo && (
               <span title="Elo model, for comparison">
                 Elo {pct(elo.home)}/{pct(elo.draw)}/{pct(elo.away)}
@@ -44,7 +46,11 @@ export function FixtureCard({ f, selectable = false }: { f: Fixture; selectable?
           </div>
         </>
       ) : (
-        <p className="text-xs text-warn">Forecast not available yet for this fixture.</p>
+        <p className="text-xs text-warn">
+          {CUPS.has(f.competition)
+            ? "No forecast: the cross-league model has not yet clearly beaten simple averages in testing."
+            : "Forecast not available yet for this fixture."}
+        </p>
       )}
       {stale != null && (
         <p className="mt-2 text-xs text-warn" title={`Latest result in our data for this league: ${f.leagueLatestResult}`}>

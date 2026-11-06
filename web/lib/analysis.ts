@@ -2,6 +2,14 @@ import type { CalibrationBin, Fixture, ModelName, Result } from "./types";
 
 export const PRIMARY_MODEL: ModelName = "dixon_coles";
 
+/** Cross-league cups (forecast by the cross-league model, not the league models). */
+export const CUPS = new Set(["CL"]);
+
+/** The model whose forecast is shown for a competition. */
+export function primaryModel(competition: string): ModelName {
+  return CUPS.has(competition) ? "cross_league_elo" : PRIMARY_MODEL;
+}
+
 /** Normalised Shannon entropy of a 1X2 forecast: 0 = certain, 1 = 1/3 each. */
 export function uncertainty(p: { home: number; draw: number; away: number }): number {
   const h = [p.home, p.draw, p.away].reduce((s, x) => (x > 0 ? s - x * Math.log(x) : s), 0);
@@ -30,7 +38,7 @@ export function isSortKey(s: string | undefined): s is SortKey {
 /** Rank fixtures by a configurable criterion. Fixtures without a forecast go last. */
 export function sortFixtures(fixtures: Fixture[], sort: SortKey): Fixture[] {
   const key = (f: Fixture): number | null => {
-    const p = f.predictions[PRIMARY_MODEL];
+    const p = f.predictions[primaryModel(f.competition)];
     switch (sort) {
       case "kickoff":
         return Date.parse(f.kickoff ?? f.playedOn);

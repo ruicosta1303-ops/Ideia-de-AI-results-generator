@@ -1,4 +1,4 @@
-export type ModelName = "dixon_coles" | "elo" | "base_rate";
+export type ModelName = "dixon_coles" | "elo" | "base_rate" | "cross_league_elo";
 
 export interface Prediction {
   home: number;
@@ -67,6 +67,17 @@ export interface ModelMetrics {
   over_2_5?: { log_loss: number; brier: number; ece: number; observed_rate: number; mean_predicted: number };
   btts?: { log_loss: number; brier: number; ece: number; observed_rate: number; mean_predicted: number };
   on_market_subset?: { n: number; log_loss: number; rps: number };
+  vs_base_rate?: LogLossGain;
+  vs_same_level_elo?: LogLossGain;
+}
+
+/** Paired log-loss difference (model minus baseline) with a bootstrap 95% interval; negative = model better. */
+export interface LogLossGain {
+  n: number;
+  mean: number | null;
+  low: number | null;
+  high: number | null;
+  clearly_better: boolean;
 }
 
 export type EvaluationReport = Record<string, Record<string, ModelMetrics>>;

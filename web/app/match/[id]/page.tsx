@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import {
-  binFor, disagreement, pct, PRIMARY_MODEL, restDays, staleDays, standings, summarise, teamForm, uncertainty, type FormEntry,
+  binFor, CUPS, disagreement, pct, primaryModel, restDays, staleDays, standings, summarise, teamForm, uncertainty, type FormEntry,
 } from "@/lib/analysis";
 import { DatabaseNotConfigured } from "@/lib/db";
 import { getHeadToHead, getLatestEvaluation, getMatch, getRecentResults, getSeasonResults } from "@/lib/queries";
@@ -20,7 +20,12 @@ export default function Page({ params }: PageProps<"/match/[id]">) {
   );
 }
 
-const MODEL_LABEL = { dixon_coles: "Dixon–Coles (main)", elo: "Elo", base_rate: "League average" } as const;
+const MODEL_LABEL = {
+  dixon_coles: "Dixon–Coles (main)",
+  elo: "Elo",
+  base_rate: "League average",
+  cross_league_elo: "Cross-league Elo (main)",
+} as const;
 
 async function Match({ params }: { params: PageProps<"/match/[id]">["params"] }) {
   const id = Number((await params).id);
@@ -47,8 +52,11 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
   const homeAtHome = teamForm(recent, m.homeId, 60).filter((e) => e.venue === "H").slice(0, 10);
   const awayAway = teamForm(recent, m.awayId, 60).filter((e) => e.venue === "A").slice(0, 10);
   const table = standings(season);
-  const dc = m.predictions[PRIMARY_MODEL];
-  const metrics = evaluation?.report?.[m.competition]?.dixon_coles ?? evaluation?.report?.ALL?.dixon_coles;
+  const cup = CUPS.has(m.competition);
+  const main = primaryModel(m.competition);
+  const dc = m.predictions[main];
+  const metrics = evaluation?.report?.[m.competition]?.[main] ?? (cup ? undefined : evaluation?.report?.ALL?.dixon_coles);
+  const gate = cup ? metrics?.vs_base_rate : undefined;
   const finished = m.homeGoals != null;
   const stale = finished ? null : staleDays(m.leagueLatestResult, m.kickoff);
 
@@ -87,7 +95,11 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
           ) : (
             <DataUnavailable
               what="Forecast"
-              impact="No live forecast is stored for this match (it may be outside the 14-day forecast window, or already played)."
+              impact={
+                cup && gate && !gate.clearly_better
+                  ? "Not shown: in testing on earlier Champions League matches the cross-league model was not clearly better than simple averages."
+                  : "No live forecast is stored for this match (it may be outside the 14-day forecast window, or already played)."
+              }
             />
           )}
         </Panel>
@@ -103,7 +115,7 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
               </tr>
             </thead>
             <tbody>
-              {(["dixon_coles", "elo", "base_rate"] as const).map((k) => {
+              {(cup ? (["cross_league_elo"] as const) : (["dixon_coles", "elo", "base_rate"] as const)).map((k) => {
                 const p = m.predictions[k];
                 return (
                   <tr key={k} className="border-t border-border">
@@ -116,14 +128,25 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
               })}
             </tbody>
           </table>
-          <p className="mt-2 text-xs text-muted">
-            Disagreement between Dixon–Coles and Elo: {pct(disagreement(dc, m.predictions.elo) ?? undefined)} (0% = identical).
-            Uncertainty of the main forecast: {dc ? pct(uncertainty(dc)) : "–"} (100% = all outcomes equally likely).
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            Both models are clearly better than league averages in testing, and both are worse than closing betting odds. See{" "}
-            <Link href="/validation" className="underline">model performance</Link>.
-          </p>
+          {cup ? (
+            <p className="mt-2 text-xs text-muted">
+              Champions League matches use one model: domestic Elo ratings made comparable across leagues with a strength
+              offset per league, learned from earlier European matches. Only the 90-minute result is forecast (no goals
+              markets). Uncertainty of the forecast: {dc ? pct(uncertainty(dc)) : "–"}. See{" "}
+              <Link href="/validation" className="underline">model performance</Link>.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-xs text-muted">
+                Disagreement between Dixon–Coles and Elo: {pct(disagreement(dc, m.predictions.elo) ?? undefined)} (0% = identical).
+                Uncertainty of the main forecast: {dc ? pct(uncertainty(dc)) : "–"} (100% = all outcomes equally likely).
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Both models are clearly better than league averages in testing, and both are worse than closing betting odds. See{" "}
+                <Link href="/validation" className="underline">model performance</Link>.
+              </p>
+            </>
+          )}
         </Panel>
       </div>
 
@@ -133,7 +156,7 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
           <div className="my-3 border-t border-border" />
           <FormBlock name={m.away} entries={awayForm} matchDate={date} />
           <p className="mt-3 text-xs text-muted">
-            Only league matches are in the database: cup and European games are missing, so rest days can be overstated.
+            League and Champions League matches are in the database; domestic cups and other European games are missing, so rest days can be overstated.
           </p>
         </Panel>
 
@@ -163,7 +186,7 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
         </Panel>
       </div>
 
-      <Panel kind="fact" title={`${m.competitionName} table before this match`}>
+      {!cup && <Panel kind="fact" title={`${m.competitionName} table before this match`}>
         {table.length ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm tabular">
@@ -204,14 +227,14 @@ async function Match({ params }: { params: PageProps<"/match/[id]">["params"] })
         ) : (
           <p className="text-sm text-muted">No results recorded yet this season.</p>
         )}
-      </Panel>
+      </Panel>}
 
       <Panel kind="quality" title="What the model does not know">
         <div className="grid gap-2 sm:grid-cols-2">
           <DataUnavailable what="Injuries and suspensions" impact="No reliable licensed source is connected yet. A missing key player is not reflected in these numbers." />
           <DataUnavailable what="Expected lineups" impact="Rotation before or after European and cup matches is not taken into account." />
           <DataUnavailable what="Shot-based xG" impact="'Expected goals' above are the model's estimate from past scores, not shot-quality xG." />
-          <DataUnavailable what="Cup and European fixtures" impact="Fatigue from midweek games is invisible to the model; rest days above count league games only." />
+          <DataUnavailable what="Domestic cup and other European fixtures" impact="Fatigue from those midweek games is invisible to the model." />
         </div>
       </Panel>
 
@@ -235,6 +258,7 @@ function ModelBlock({ dc, m, metrics }: { dc: Prediction; m: { home: string; awa
   return (
     <div className="space-y-4">
       <ProbabilityBar home={dc.home} draw={dc.draw} away={dc.away} homeLabel={m.home} awayLabel={m.away} />
+      {dc.expHome != null && (
       <div className="grid grid-cols-2 gap-3 text-sm tabular">
         <div className="rounded bg-surface-2 p-2">
           <div className="text-xs text-muted">Model expected goals</div>
@@ -254,6 +278,7 @@ function ModelBlock({ dc, m, metrics }: { dc: Prediction; m: { home: string; awa
           </tbody>
         </table>
       </div>
+      )}
       {calib.length > 0 && (
         <div>
           <h3 className="mb-1 text-xs font-semibold text-secondary">How reliable are forecasts like these?</h3>
