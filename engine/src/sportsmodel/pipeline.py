@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import sys
 from collections import defaultdict
@@ -22,7 +23,8 @@ from .providers import football_data_csv as csvsrc
 from .providers.base import ProviderError
 from .providers.football_data_org import FootballDataOrg
 from .cross_league import CupMatch, log_loss_gain, walk_forward_cup
-from .teams import API, CSV, TeamMappingError, csv_only_aliases, historical_only_aliases, load_cup_mapping, load_mapping
+from .teams import (API, CSV, TeamMappingError, csv_only_aliases, historical_only_aliases, load_cup_leagues,
+                    load_cup_mapping, load_mapping)
 
 UPCOMING = {"SCHEDULED", "TIMED"}
 # Forecasts are only made for matches starting at least this long after the run starts: a run takes
@@ -145,6 +147,10 @@ def ingest_cups(conn, cups: list[str], api: FootballDataOrg, today: date) -> dic
     except (TeamMappingError, OSError) as e:
         out["problems"].append(f"cup team mapping: {e}")
         return out
+    wrong = check_cup_leagues(conn, load_cup_leagues(), today)
+    if wrong:
+        out["problems"].append("cup_teams.csv names a club that has no recent match in its league: " + "; ".join(wrong))
+        return out
     resolve = db.TeamResolver(conn)
     for cup in cups:
         seasons = {}
@@ -163,6 +169,23 @@ def ingest_cups(conn, cups: list[str], api: FootballDataOrg, today: date) -> dic
             out["matches"][f"{cup} {season}"] = len(fs)
         conn.commit()
     return out
+
+
+def check_cup_leagues(conn, leagues: dict[str, str], today: date) -> list[str]:
+    """A cup club mapped to a league must have played in it in the last three years; otherwise the
+    name is probably misspelled and the club would silently be rated as an average club."""
+    rows = conn.execute("SELECT DISTINCT m.competition_code, t.name FROM matches m JOIN teams t "
+                        "ON t.id IN (m.home_team_id, m.away_team_id) WHERE m.home_goals IS NOT NULL "
+                        "AND m.played_on > %s", (today - timedelta(days=3 * 365),)).fetchall()
+    by_league: dict[str, set[str]] = defaultdict(set)
+    for comp, name in rows:
+        by_league[comp].add(name)
+    wrong = []
+    for canonical, league in sorted(leagues.items()):
+        if league != "OTHER" and canonical not in by_league.get(league, set()):
+            close = difflib.get_close_matches(canonical, sorted(by_league.get(league, set())), n=3, cutoff=0.3)
+            wrong.append(f"{canonical!r} not in {league} (closest: {close})")
+    return wrong
 
 
 def load_cup_records(conn, cup: str, now: datetime, horizon_days: int = 14) -> list[CupMatch]:

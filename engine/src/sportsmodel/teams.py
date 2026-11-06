@@ -78,6 +78,12 @@ def csv_only_aliases(names_by_comp: dict[str, set[str]], other_csv_names: dict[s
     return out
 
 
+def load_cup_leagues(path: Path = CUP_TEAMS) -> dict[str, str]:
+    """canonical name -> the league data/cup_teams.csv says the club plays in (OTHER = not covered)."""
+    with open(path, newline="", encoding="utf-8") as fh:
+        return {r["canonical"].strip(): r["league"].strip() for r in csv.DictReader(fh)}
+
+
 def load_cup_mapping(league_mapping: list[tuple[str, str, str]], path: Path = CUP_TEAMS) -> list[tuple[str, str, str]]:
     """Aliases for cup (football-data.org) team names that the league mapping does not cover.
 

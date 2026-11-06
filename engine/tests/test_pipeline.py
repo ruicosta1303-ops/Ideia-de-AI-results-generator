@@ -181,6 +181,7 @@ def test_pipeline_champions_league(conn, monkeypatch, tmp_path):
     mapping = [(s, n, f"{t} FC") for t in TEAMS for s, n in ((API, f"{t} FC"), (CSV, t))]
     monkeypatch.setattr(pipeline, "load_mapping", lambda: mapping)
     monkeypatch.setattr(pipeline, "load_cup_mapping", lambda m: [(API, "Faraway FC", "Faraway FC")])
+    monkeypatch.setattr(pipeline, "load_cup_leagues", lambda: {"Faraway FC": "OTHER", "Club 3 FC": "PL"})
 
     test_from = (TODAY - timedelta(days=500)).isoformat()
     args = ["--competitions", "PL", "--seasons", "4", "--test-from", test_from, "--out", str(tmp_path)]
@@ -221,7 +222,18 @@ def test_pipeline_skips_cup_with_unmapped_teams(conn, monkeypatch, tmp_path):
     mapping = [(s, n, f"{t} FC") for t in TEAMS for s, n in ((API, f"{t} FC"), (CSV, t))]
     monkeypatch.setattr(pipeline, "load_mapping", lambda: mapping)
     monkeypatch.setattr(pipeline, "load_cup_mapping", lambda m: [])
+    monkeypatch.setattr(pipeline, "load_cup_leagues", lambda: {})
     assert pipeline.main(["--competitions", "PL", "--seasons", "2", "--skip-backtest", "--out", str(tmp_path)]) == 0
     out = json.loads((tmp_path / "latest.json").read_text())
     assert any("Nobody Knows FC" in p for p in out["ingest"]["problems"])  # reported, leagues still updated
     assert len([u for u in out["upcoming"] if u["competition"] == "PL"]) == 1
+
+
+def test_cup_league_check_names_close_matches(conn):
+    from sportsmodel import db
+    db.upsert_result(conn, db.TeamResolver(conn), __import__("tests.test_db", fromlist=["hist"]).hist(), "csv",
+                     datetime.now(timezone.utc))
+    conn.execute("UPDATE matches SET played_on = %s", (TODAY - timedelta(days=30),))
+    assert pipeline.check_cup_leagues(conn, {"Home A FC": "PL", "Someone": "OTHER"}, TODAY) == []
+    [msg] = pipeline.check_cup_leagues(conn, {"Home A": "PL"}, TODAY)
+    assert "Home A FC" in msg  # suggests the stored spelling
